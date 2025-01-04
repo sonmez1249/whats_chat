@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'group_details_page.dart';
 
 class ChatPage extends StatefulWidget {
   final String userName;
@@ -13,6 +14,10 @@ class ChatPage extends StatefulWidget {
 class _ChatPageState extends State<ChatPage> {
   final _messageController = TextEditingController();
   final currentUser = FirebaseAuth.instance.currentUser;
+
+  // Seçili mesajları tutmak için
+  final Set<String> _selectedMessages = {};
+  bool _isSelectionMode = false;
 
   Future<void> _sendMessage(String chatId) async {
     if (_messageController.text.trim().isEmpty) return;
@@ -44,6 +49,110 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
+  // Mesaj silme dialog'unu göster
+  Future<void> _showDeleteDialog(String chatId) async {
+    // Seçili mesajların hepsi bana ait mi kontrol et
+    bool allMine = true;
+    for (var messageId in _selectedMessages) {
+      final message = await FirebaseFirestore.instance
+          .collection('chats')
+          .doc(chatId)
+          .collection('messages')
+          .doc(messageId)
+          .get();
+
+      final data = message.data() as Map<String, dynamic>;
+      if (data['senderId'] != currentUser?.email) {
+        allMine = false;
+        break;
+      }
+    }
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.grey[900],
+        title: const Text(
+          'Mesaj silinsin mi?',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: const Text(
+          'Mesajları silmek istediğinize emin misiniz?',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text(
+              'İptal',
+              style: TextStyle(color: Colors.white70),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text(
+              'Benden sil',
+              style: TextStyle(color: Colors.red),
+            ),
+          ),
+          if (allMine) // Sadece mesajlar bana aitse herkesten silme seçeneği göster
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text(
+                'Herkesten sil',
+                style: TextStyle(color: Colors.red),
+              ),
+            ),
+        ],
+      ),
+    );
+
+    if (result != null) {
+      await _deleteMessages(chatId, result);
+    }
+  }
+
+  // Mesajları sil
+  Future<void> _deleteMessages(String chatId, bool onlyForMe) async {
+    try {
+      final batch = FirebaseFirestore.instance.batch();
+
+      for (var messageId in _selectedMessages) {
+        final messageRef = FirebaseFirestore.instance
+            .collection('chats')
+            .doc(chatId)
+            .collection('messages')
+            .doc(messageId);
+
+        // Mesaj sahibini kontrol et
+        final message = await messageRef.get();
+        final data = message.data() as Map<String, dynamic>;
+        final isMyMessage = data['senderId'] == currentUser?.email;
+
+        if (onlyForMe) {
+          // Benden sil seçeneği için
+          batch.update(messageRef, {
+            'deletedFor': FieldValue.arrayUnion([currentUser?.email])
+          });
+        } else if (isMyMessage) {
+          // Herkesten sil seçeneği için (sadece benim mesajlarımı sil)
+          batch.delete(messageRef);
+        }
+      }
+
+      await batch.commit();
+
+      setState(() {
+        _selectedMessages.clear();
+        _isSelectionMode = false;
+      });
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Mesajlar silinemedi: $e')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final arguments =
@@ -54,127 +163,103 @@ class _ChatPageState extends State<ChatPage> {
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 0,
-        title: StreamBuilder<DocumentSnapshot>(
-          stream: FirebaseFirestore.instance
-              .collection('chats')
-              .doc(chatId)
-              .snapshots(),
-          builder: (context, chatSnapshot) {
-            if (!chatSnapshot.hasData) {
-              return const SizedBox();
-            }
+        leading: _isSelectionMode
+            ? IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: () {
+                  setState(() {
+                    _selectedMessages.clear();
+                    _isSelectionMode = false;
+                  });
+                },
+              )
+            : null,
+        title: _isSelectionMode
+            ? Text('${_selectedMessages.length} seçildi')
+            : StreamBuilder<DocumentSnapshot>(
+                stream: FirebaseFirestore.instance
+                    .collection('chats')
+                    .doc(chatId)
+                    .snapshots(),
+                builder: (context, chatSnapshot) {
+                  if (!chatSnapshot.hasData) {
+                    return const SizedBox();
+                  }
 
-            final chatData = chatSnapshot.data!.data() as Map<String, dynamic>;
-            final isGroup = chatData['isGroup'] ?? false;
-            final chatName = isGroup ? chatData['chatName'] : userEmail;
+                  final chatData =
+                      chatSnapshot.data!.data() as Map<String, dynamic>;
+                  final isGroup = chatData['isGroup'] ?? false;
+                  final chatName = isGroup ? chatData['chatName'] : userEmail;
 
-            if (isGroup) {
-              // Grup sohbeti başlığı
-              return Row(
-                children: [
-                  CircleAvatar(
-                    backgroundColor: Theme.of(context).primaryColor,
-                    child: const Icon(Icons.group, color: Colors.white),
-                  ),
-                  const SizedBox(width: 12),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        chatName,
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      Text(
-                        '${chatData['members']?.length ?? 0} üye',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey[600],
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              );
-            } else {
-              // Birebir sohbet başlığı
-              return FutureBuilder<QuerySnapshot>(
-                future: FirebaseFirestore.instance
-                    .collection('users')
-                    .where('email', isEqualTo: userEmail)
-                    .get(),
-                builder: (context, snapshot) {
-                  if (snapshot.hasData && snapshot.data!.docs.isNotEmpty) {
-                    final userData = snapshot.data!.docs.first.data()
-                        as Map<String, dynamic>;
-                    final userName = userData['userName'] ?? userEmail;
-
-                    return Row(
+                  return GestureDetector(
+                    onTap: () {
+                      if (isGroup) {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => GroupDetailsPage(
+                              chatId: chatId,
+                              groupName: chatData['chatName'],
+                              members:
+                                  List<String>.from(chatData['members'] ?? []),
+                              createdBy: chatData['createdBy'],
+                            ),
+                          ),
+                        );
+                      }
+                    },
+                    child: Row(
                       children: [
                         CircleAvatar(
                           backgroundColor: Theme.of(context).primaryColor,
-                          child: Text(
-                            userName[0].toUpperCase(),
-                            style: const TextStyle(color: Colors.white),
-                          ),
+                          child: const Icon(Icons.group, color: Colors.white),
                         ),
                         const SizedBox(width: 12),
                         Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              userName,
+                              chatName,
                               style: const TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
                             Text(
-                              'Çevrimiçi',
+                              '${chatData['members']?.length ?? 0} üye',
                               style: TextStyle(
                                 fontSize: 12,
-                                color: Colors.green[600],
+                                color: Colors.grey[600],
                               ),
                             ),
                           ],
                         ),
                       ],
-                    );
-                  }
-                  return Row(
-                    children: [
-                      CircleAvatar(
-                        backgroundColor: Theme.of(context).primaryColor,
-                        child: Text(
-                          userEmail[0].toUpperCase(),
-                          style: const TextStyle(color: Colors.white),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Text(userEmail),
-                    ],
+                    ),
                   );
                 },
-              );
-            }
-          },
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.video_call),
-            onPressed: () {},
-          ),
-          IconButton(
-            icon: const Icon(Icons.call),
-            onPressed: () {},
-          ),
-          IconButton(
-            icon: const Icon(Icons.more_vert),
-            onPressed: () {},
-          ),
-        ],
+              ),
+        actions: _isSelectionMode
+            ? [
+                IconButton(
+                  icon: const Icon(Icons.delete),
+                  onPressed: () => _showDeleteDialog(chatId),
+                ),
+              ]
+            : [
+                IconButton(
+                  icon: const Icon(Icons.video_call),
+                  onPressed: () {},
+                ),
+                IconButton(
+                  icon: const Icon(Icons.call),
+                  onPressed: () {},
+                ),
+                IconButton(
+                  icon: const Icon(Icons.more_vert),
+                  onPressed: () {},
+                ),
+              ],
       ),
       body: Column(
         children: [
@@ -221,123 +306,161 @@ class _ChatPageState extends State<ChatPage> {
                         final message = snapshot.data!.docs[index];
                         final data = message.data() as Map<String, dynamic>;
                         final isMe = data['senderId'] == currentUser?.email;
+                        final isDeleted = (data['deletedFor'] ?? [])
+                            .contains(currentUser?.email);
 
-                        return Align(
-                          alignment: isMe
-                              ? Alignment.centerRight
-                              : Alignment.centerLeft,
+                        // Silinmiş mesajları gösterme
+                        if (isDeleted) return const SizedBox();
+
+                        return GestureDetector(
+                          onLongPress: () {
+                            setState(() {
+                              _isSelectionMode = true;
+                              _selectedMessages.add(message.id);
+                            });
+                          },
+                          onTap: _isSelectionMode
+                              ? () {
+                                  setState(() {
+                                    if (_selectedMessages
+                                        .contains(message.id)) {
+                                      _selectedMessages.remove(message.id);
+                                      if (_selectedMessages.isEmpty) {
+                                        _isSelectionMode = false;
+                                      }
+                                    } else {
+                                      _selectedMessages.add(message.id);
+                                    }
+                                  });
+                                }
+                              : null,
                           child: Container(
-                            margin: const EdgeInsets.only(bottom: 8),
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: isMe
-                                  ? Theme.of(context).primaryColor
-                                  : Colors.grey[200],
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: isMe
-                                  ? CrossAxisAlignment.end
-                                  : CrossAxisAlignment.start,
-                              children: [
-                                if (!isMe && isGroupChat) ...[
-                                  FutureBuilder<QuerySnapshot>(
-                                    future: FirebaseFirestore.instance
-                                        .collection('users')
-                                        .where('email',
-                                            isEqualTo: data['senderId'])
-                                        .get(),
-                                    builder: (context, userSnapshot) {
-                                      if (userSnapshot.hasData &&
-                                          userSnapshot.data != null &&
-                                          userSnapshot.data!.docs.isNotEmpty) {
-                                        final userData =
-                                            userSnapshot.data!.docs.first.data()
-                                                as Map<String, dynamic>;
-                                        return Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            CircleAvatar(
-                                              radius: 10,
-                                              backgroundColor: Theme.of(context)
-                                                  .primaryColor
-                                                  .withOpacity(0.5),
-                                              child: Text(
-                                                (userData['userName'] ??
-                                                        data['senderId'])[0]
-                                                    .toUpperCase(),
-                                                style: const TextStyle(
+                            color: _selectedMessages.contains(message.id)
+                                ? Colors.blue.withOpacity(0.2)
+                                : null,
+                            child: Align(
+                              alignment: isMe
+                                  ? Alignment.centerRight
+                                  : Alignment.centerLeft,
+                              child: Container(
+                                margin: const EdgeInsets.only(bottom: 8),
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: isMe
+                                      ? Theme.of(context).primaryColor
+                                      : Colors.grey[200],
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: isMe
+                                      ? CrossAxisAlignment.end
+                                      : CrossAxisAlignment.start,
+                                  children: [
+                                    if (!isMe && isGroupChat) ...[
+                                      FutureBuilder<QuerySnapshot>(
+                                        future: FirebaseFirestore.instance
+                                            .collection('users')
+                                            .where('email',
+                                                isEqualTo: data['senderId'])
+                                            .get(),
+                                        builder: (context, userSnapshot) {
+                                          if (userSnapshot.hasData &&
+                                              userSnapshot.data != null &&
+                                              userSnapshot
+                                                  .data!.docs.isNotEmpty) {
+                                            final userData = userSnapshot
+                                                .data!.docs.first
+                                                .data() as Map<String, dynamic>;
+                                            return Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                CircleAvatar(
+                                                  radius: 10,
+                                                  backgroundColor:
+                                                      Theme.of(context)
+                                                          .primaryColor
+                                                          .withOpacity(0.5),
+                                                  child: Text(
+                                                    (userData['userName'] ??
+                                                            data['senderId'])[0]
+                                                        .toUpperCase(),
+                                                    style: const TextStyle(
+                                                      fontSize: 12,
+                                                      color: Colors.white,
+                                                      fontWeight:
+                                                          FontWeight.bold,
+                                                    ),
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 4),
+                                                Text(
+                                                  userData['userName'] ??
+                                                      data['senderId'],
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                    color: Colors.grey[600],
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                                ),
+                                              ],
+                                            );
+                                          }
+                                          return Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              CircleAvatar(
+                                                radius: 10,
+                                                backgroundColor:
+                                                    Theme.of(context)
+                                                        .primaryColor
+                                                        .withOpacity(0.5),
+                                                child: Text(
+                                                  (data['senderId'] ?? '')[0]
+                                                      .toUpperCase(),
+                                                  style: const TextStyle(
+                                                    fontSize: 12,
+                                                    color: Colors.white,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 4),
+                                              Text(
+                                                data['senderId'] ?? '',
+                                                style: TextStyle(
                                                   fontSize: 12,
-                                                  color: Colors.white,
+                                                  color: Colors.grey[600],
                                                   fontWeight: FontWeight.bold,
                                                 ),
                                               ),
-                                            ),
-                                            const SizedBox(width: 4),
-                                            Text(
-                                              userData['userName'] ??
-                                                  data['senderId'],
-                                              style: TextStyle(
-                                                fontSize: 12,
-                                                color: Colors.grey[600],
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                            ),
-                                          ],
-                                        );
-                                      }
-                                      return Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          CircleAvatar(
-                                            radius: 10,
-                                            backgroundColor: Theme.of(context)
-                                                .primaryColor
-                                                .withOpacity(0.5),
-                                            child: Text(
-                                              (data['senderId'] ?? '')[0]
-                                                  .toUpperCase(),
-                                              style: const TextStyle(
-                                                fontSize: 12,
-                                                color: Colors.white,
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                            ),
-                                          ),
-                                          const SizedBox(width: 4),
-                                          Text(
-                                            data['senderId'] ?? '',
-                                            style: TextStyle(
-                                              fontSize: 12,
-                                              color: Colors.grey[600],
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                          ),
-                                        ],
-                                      );
-                                    },
-                                  ),
-                                  const SizedBox(height: 4),
-                                ],
-                                Text(
-                                  data['text'] ?? '',
-                                  style: TextStyle(
-                                    color: isMe ? Colors.white : Colors.black,
-                                  ),
+                                            ],
+                                          );
+                                        },
+                                      ),
+                                      const SizedBox(height: 4),
+                                    ],
+                                    Text(
+                                      data['text'] ?? '',
+                                      style: TextStyle(
+                                        color:
+                                            isMe ? Colors.white : Colors.black,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      data['timestamp'] != null
+                                          ? '${(data['timestamp'] as Timestamp).toDate().hour}:${(data['timestamp'] as Timestamp).toDate().minute.toString().padLeft(2, '0')}'
+                                          : '',
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        color: isMe
+                                            ? Colors.white70
+                                            : Colors.grey[600],
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  data['timestamp'] != null
-                                      ? '${(data['timestamp'] as Timestamp).toDate().hour}:${(data['timestamp'] as Timestamp).toDate().minute.toString().padLeft(2, '0')}'
-                                      : '',
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    color: isMe
-                                        ? Colors.white70
-                                        : Colors.grey[600],
-                                  ),
-                                ),
-                              ],
+                              ),
                             ),
                           ),
                         );
