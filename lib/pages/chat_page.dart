@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'group_details_page.dart';
 import '../widgets/reaction_picker.dart';
+import '../models/message_builder.dart';
 
 class ChatPage extends StatefulWidget {
   final String userName;
@@ -31,16 +32,19 @@ class _ChatPageState extends State<ChatPage> {
 
       final isGroup = chatDoc.data()?['isGroup'] ?? false;
 
+      // Builder pattern kullanarak mesaj oluştur
+      final message = MessageBuilder()
+          .setText(_messageController.text.trim())
+          .setSender(currentUser?.email ?? '')
+          .setIsGroup(isGroup)
+          .setTimestamp(DateTime.now())
+          .build();
+
       await FirebaseFirestore.instance
           .collection('chats')
           .doc(chatId)
           .collection('messages')
-          .add({
-        'text': _messageController.text.trim(),
-        'senderId': currentUser?.email,
-        'timestamp': FieldValue.serverTimestamp(),
-        'isGroup': isGroup,
-      });
+          .add(message.toMap());
 
       _messageController.clear();
     } catch (e) {
@@ -155,34 +159,39 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   // Reaksiyon widget'larını oluşturan metod
-  List<Widget> _buildReactionWidgets(List reactions) {
-    final Map<String, int> reactionCounts = {};
+  Widget _buildReactionsWidget(List? reactions, {bool isMe = false}) {
+    if (reactions == null || reactions.isEmpty) return const SizedBox();
 
+    final Map<String, int> reactionCounts = {};
     for (var reaction in reactions) {
       final emoji = reaction['emoji'] as String;
       reactionCounts[emoji] = (reactionCounts[emoji] ?? 0) + 1;
     }
 
-    return reactionCounts.entries.map((entry) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.3),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(entry.key), // emoji
-            const SizedBox(width: 4),
-            Text(
-              entry.value.toString(),
-              style: const TextStyle(fontSize: 12),
+    return Container(
+      margin: const EdgeInsets.only(top: 4),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: reactionCounts.entries.map((entry) {
+          return Container(
+            margin: const EdgeInsets.only(right: 2),
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+            decoration: BoxDecoration(
+              color: isMe ? Colors.white.withOpacity(0.1) : Colors.grey[200],
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: isMe ? Colors.white.withOpacity(0.2) : Colors.grey[300]!,
+                width: 0.5,
+              ),
             ),
-          ],
-        ),
-      );
-    }).toList();
+            child: Text(
+              entry.key,
+              style: const TextStyle(fontSize: 14),
+            ),
+          );
+        }).toList(),
+      ),
+    );
   }
 
   @override
@@ -215,56 +224,93 @@ class _ChatPageState extends State<ChatPage> {
                     .snapshots(),
                 builder: (context, chatSnapshot) {
                   if (!chatSnapshot.hasData) {
-                    return const SizedBox();
+                    return const Text('Yükleniyor...');
                   }
 
                   final chatData =
                       chatSnapshot.data!.data() as Map<String, dynamic>;
                   final isGroup = chatData['isGroup'] ?? false;
-                  final chatName = isGroup ? chatData['chatName'] : userEmail;
 
                   return GestureDetector(
-                    onTap: () {
-                      if (isGroup) {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => GroupDetailsPage(
-                              chatId: chatId,
-                              groupName: chatData['chatName'],
-                              members:
-                                  List<String>.from(chatData['members'] ?? []),
-                              createdBy: chatData['createdBy'],
-                            ),
-                          ),
-                        );
-                      }
-                    },
+                    onTap: isGroup
+                        ? () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => GroupDetailsPage(
+                                  chatId: chatId,
+                                  groupName: chatData['chatName'],
+                                  members: List<String>.from(
+                                      chatData['members'] ?? []),
+                                  createdBy: chatData['createdBy'],
+                                ),
+                              ),
+                            );
+                          }
+                        : null,
                     child: Row(
                       children: [
                         CircleAvatar(
                           backgroundColor: Theme.of(context).primaryColor,
-                          child: const Icon(Icons.group, color: Colors.white),
+                          radius: 20,
+                          child: isGroup
+                              ? const Icon(Icons.group, color: Colors.white)
+                              : Text(
+                                  userEmail[0].toUpperCase(),
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
                         ),
                         const SizedBox(width: 12),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              chatName,
-                              style: const TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            Text(
-                              '${chatData['members']?.length ?? 0} üye',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.grey[600],
-                              ),
-                            ),
-                          ],
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (isGroup) ...[
+                                Text(
+                                  chatData['chatName'] ?? '',
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                Text(
+                                  '${chatData['members']?.length ?? 0} üye',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey[600],
+                                  ),
+                                ),
+                              ] else
+                                StreamBuilder<QuerySnapshot>(
+                                  stream: FirebaseFirestore.instance
+                                      .collection('users')
+                                      .where('email', isEqualTo: userEmail)
+                                      .snapshots(),
+                                  builder: (context, userSnapshot) {
+                                    String displayName = userEmail;
+                                    if (userSnapshot.hasData &&
+                                        userSnapshot.data!.docs.isNotEmpty) {
+                                      final userData =
+                                          userSnapshot.data!.docs.first.data()
+                                              as Map<String, dynamic>;
+                                      displayName =
+                                          userData['userName'] ?? userEmail;
+                                    }
+                                    return Text(
+                                      displayName,
+                                      style: const TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    );
+                                  },
+                                ),
+                            ],
+                          ),
                         ),
                       ],
                     ),
@@ -381,25 +427,42 @@ class _ChatPageState extends State<ChatPage> {
                               context: context,
                               builder: (context) => ReactionPicker(
                                 onReactionSelected: (emoji) async {
-                                  final messageRef = FirebaseFirestore.instance
-                                      .collection('chats')
-                                      .doc(chatId)
-                                      .collection('messages')
-                                      .doc(message.id);
+                                  try {
+                                    final messageRef = FirebaseFirestore
+                                        .instance
+                                        .collection('chats')
+                                        .doc(chatId)
+                                        .collection('messages')
+                                        .doc(message.id);
 
-                                  await messageRef.update({
-                                    'reactions': FieldValue.arrayUnion([
-                                      {
-                                        'emoji': emoji,
-                                        'userId': currentUser?.email,
-                                        'timestamp':
-                                            FieldValue.serverTimestamp(),
-                                      }
-                                    ])
-                                  });
+                                    // Önce mevcut reaksiyonları kontrol et
+                                    final messageDoc = await messageRef.get();
+                                    final messageData = messageDoc.data()
+                                        as Map<String, dynamic>;
+                                    final reactions = List.from(
+                                        messageData['reactions'] ?? []);
 
-                                  if (mounted) {
-                                    Navigator.pop(context);
+                                    // Kullanıcının önceki reaksiyonunu kaldır
+                                    reactions.removeWhere((r) =>
+                                        r['userId'] == currentUser?.email);
+
+                                    // Yeni reaksiyonu ekle
+                                    reactions.add({
+                                      'emoji': emoji,
+                                      'userId': currentUser?.email,
+                                      'timestamp':
+                                          DateTime.now().toIso8601String(),
+                                    });
+
+                                    // Reaksiyonları güncelle
+                                    await messageRef
+                                        .update({'reactions': reactions});
+
+                                    if (mounted) {
+                                      Navigator.pop(context);
+                                    }
+                                  } catch (e) {
+                                    print('Reaksiyon eklenirken hata: $e');
                                   }
                                 },
                               ),
@@ -429,7 +492,7 @@ class _ChatPageState extends State<ChatPage> {
                                   ? Alignment.centerRight
                                   : Alignment.centerLeft,
                               child: Container(
-                                margin: const EdgeInsets.only(bottom: 8),
+                                margin: const EdgeInsets.only(bottom: 12),
                                 padding: const EdgeInsets.all(12),
                                 decoration: BoxDecoration(
                                   color: isMe
@@ -437,124 +500,144 @@ class _ChatPageState extends State<ChatPage> {
                                       : Colors.grey[200],
                                   borderRadius: BorderRadius.circular(16),
                                 ),
-                                child: Column(
-                                  crossAxisAlignment: isMe
-                                      ? CrossAxisAlignment.end
-                                      : CrossAxisAlignment.start,
+                                child: Stack(
                                   children: [
-                                    if (!isMe && isGroupChat) ...[
-                                      FutureBuilder<QuerySnapshot>(
-                                        future: FirebaseFirestore.instance
-                                            .collection('users')
-                                            .where('email',
-                                                isEqualTo: data['senderId'])
-                                            .get(),
-                                        builder: (context, userSnapshot) {
-                                          if (userSnapshot.hasData &&
-                                              userSnapshot.data != null &&
-                                              userSnapshot
-                                                  .data!.docs.isNotEmpty) {
-                                            final userData = userSnapshot
-                                                .data!.docs.first
-                                                .data() as Map<String, dynamic>;
-                                            return Row(
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                CircleAvatar(
-                                                  radius: 10,
-                                                  backgroundColor:
-                                                      Theme.of(context)
-                                                          .primaryColor
-                                                          .withOpacity(0.5),
-                                                  child: Text(
-                                                    (userData['userName'] ??
-                                                            data['senderId'])[0]
-                                                        .toUpperCase(),
-                                                    style: const TextStyle(
+                                    Column(
+                                      crossAxisAlignment: isMe
+                                          ? CrossAxisAlignment.end
+                                          : CrossAxisAlignment.start,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        if (!isMe && isGroupChat) ...[
+                                          FutureBuilder<QuerySnapshot>(
+                                            future: FirebaseFirestore.instance
+                                                .collection('users')
+                                                .where('email',
+                                                    isEqualTo: data['senderId'])
+                                                .get(),
+                                            builder: (context, userSnapshot) {
+                                              if (userSnapshot.hasData &&
+                                                  userSnapshot.data != null &&
+                                                  userSnapshot
+                                                      .data!.docs.isNotEmpty) {
+                                                final userData = userSnapshot
+                                                        .data!.docs.first
+                                                        .data()
+                                                    as Map<String, dynamic>;
+                                                return Row(
+                                                  mainAxisSize:
+                                                      MainAxisSize.min,
+                                                  children: [
+                                                    CircleAvatar(
+                                                      radius: 10,
+                                                      backgroundColor:
+                                                          Theme.of(context)
+                                                              .primaryColor
+                                                              .withOpacity(0.5),
+                                                      child: Text(
+                                                        (userData['userName'] ??
+                                                                data[
+                                                                    'senderId'])[0]
+                                                            .toUpperCase(),
+                                                        style: const TextStyle(
+                                                          fontSize: 12,
+                                                          color: Colors.white,
+                                                          fontWeight:
+                                                              FontWeight.bold,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                    const SizedBox(width: 4),
+                                                    Text(
+                                                      userData['userName'] ??
+                                                          data['senderId'],
+                                                      style: TextStyle(
+                                                        fontSize: 12,
+                                                        color: Colors.grey[600],
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                );
+                                              }
+                                              return Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  CircleAvatar(
+                                                    radius: 10,
+                                                    backgroundColor:
+                                                        Theme.of(context)
+                                                            .primaryColor
+                                                            .withOpacity(0.5),
+                                                    child: Text(
+                                                      (data['senderId'] ??
+                                                              '')[0]
+                                                          .toUpperCase(),
+                                                      style: const TextStyle(
+                                                        fontSize: 12,
+                                                        color: Colors.white,
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 4),
+                                                  Text(
+                                                    data['senderId'] ?? '',
+                                                    style: TextStyle(
                                                       fontSize: 12,
-                                                      color: Colors.white,
+                                                      color: Colors.grey[600],
                                                       fontWeight:
                                                           FontWeight.bold,
                                                     ),
                                                   ),
-                                                ),
-                                                const SizedBox(width: 4),
-                                                Text(
-                                                  userData['userName'] ??
-                                                      data['senderId'],
-                                                  style: TextStyle(
-                                                    fontSize: 12,
-                                                    color: Colors.grey[600],
-                                                    fontWeight: FontWeight.bold,
-                                                  ),
-                                                ),
-                                              ],
-                                            );
-                                          }
-                                          return Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              CircleAvatar(
-                                                radius: 10,
-                                                backgroundColor:
-                                                    Theme.of(context)
-                                                        .primaryColor
-                                                        .withOpacity(0.5),
-                                                child: Text(
-                                                  (data['senderId'] ?? '')[0]
-                                                      .toUpperCase(),
-                                                  style: const TextStyle(
-                                                    fontSize: 12,
-                                                    color: Colors.white,
-                                                    fontWeight: FontWeight.bold,
-                                                  ),
-                                                ),
-                                              ),
-                                              const SizedBox(width: 4),
-                                              Text(
-                                                data['senderId'] ?? '',
-                                                style: TextStyle(
-                                                  fontSize: 12,
-                                                  color: Colors.grey[600],
-                                                  fontWeight: FontWeight.bold,
-                                                ),
-                                              ),
-                                            ],
-                                          );
-                                        },
-                                      ),
-                                      const SizedBox(height: 4),
-                                    ],
-                                    Text(
-                                      data['text'] ?? '',
-                                      style: TextStyle(
-                                        color:
-                                            isMe ? Colors.white : Colors.black,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      data['timestamp'] != null
-                                          ? '${(data['timestamp'] as Timestamp).toDate().hour}:${(data['timestamp'] as Timestamp).toDate().minute.toString().padLeft(2, '0')}'
-                                          : '',
-                                      style: TextStyle(
-                                        fontSize: 10,
-                                        color: isMe
-                                            ? Colors.white70
-                                            : Colors.grey[600],
-                                      ),
-                                    ),
-                                    // Reaksiyonları göster
-                                    if (data['reactions'] != null &&
-                                        (data['reactions'] as List).isNotEmpty)
-                                      Padding(
-                                        padding: const EdgeInsets.only(top: 8),
-                                        child: Wrap(
-                                          spacing: 4,
-                                          children: _buildReactionWidgets(
-                                              data['reactions'] as List),
+                                                ],
+                                              );
+                                            },
+                                          ),
+                                          const SizedBox(height: 4),
+                                        ],
+                                        Text(
+                                          data['text'] ?? '',
+                                          style: TextStyle(
+                                            color: isMe
+                                                ? Colors.white
+                                                : Colors.black,
+                                          ),
                                         ),
-                                      ),
+                                        const SizedBox(height: 4),
+                                        Row(
+                                          mainAxisAlignment: isMe
+                                              ? MainAxisAlignment.spaceBetween
+                                              : MainAxisAlignment.spaceBetween,
+                                          mainAxisSize: MainAxisSize.max,
+                                          children: [
+                                            if (!isMe)
+                                              _buildReactionsWidget(
+                                                data['reactions'] as List?,
+                                                isMe: isMe,
+                                              ),
+                                            Text(
+                                              data['timestamp'] != null
+                                                  ? '${(data['timestamp'] as Timestamp).toDate().hour}:${(data['timestamp'] as Timestamp).toDate().minute.toString().padLeft(2, '0')}'
+                                                  : '',
+                                              style: TextStyle(
+                                                fontSize: 10,
+                                                color: isMe
+                                                    ? Colors.white70
+                                                    : Colors.grey[600],
+                                              ),
+                                            ),
+                                            if (isMe)
+                                              _buildReactionsWidget(
+                                                data['reactions'] as List?,
+                                                isMe: isMe,
+                                              ),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
                                   ],
                                 ),
                               ),

@@ -60,12 +60,6 @@ class _CreateChatPageState extends State<CreateChatPage> {
 
   Future<void> _createChat() async {
     if (!_formKey.currentState!.validate()) return;
-    if (_isGroup && _selectedEmails.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Lütfen en az bir kullanıcı ekleyin')),
-      );
-      return;
-    }
 
     setState(() => _isLoading = true);
 
@@ -76,37 +70,66 @@ class _CreateChatPageState extends State<CreateChatPage> {
       final firestore = FirebaseFirestore.instance;
 
       if (_isGroup) {
-        // Grup üyelerini hazırla
-        final members = [currentUser.email!, ..._selectedEmails];
+        // Grup sohbeti oluşturma kodu...
+      } else {
+        // Kişisel sohbet için kullanıcıyı kontrol et
+        final userQuery = await firestore
+            .collection('users')
+            .where('email', isEqualTo: _emailController.text.trim())
+            .get();
 
-        // Grup sohbeti oluştur
-        final chatDoc = await firestore.collection('chats').add({
-          'chatName': _groupNameController.text,
-          'createdAt': FieldValue.serverTimestamp(),
-          'createdBy': currentUser.email,
-          'isGroup': true,
-          'members': members,
-        });
-
-        // Grup yöneticisini ekle
-        await chatDoc.collection('groupMember').add({
-          'email': currentUser.email,
-          'role': 'admin',
-        });
-
-        // Diğer üyeleri ekle
-        for (var email in _selectedEmails) {
-          await chatDoc.collection('groupMember').add({
-            'email': email,
-            'role': 'member',
-          });
+        if (userQuery.docs.isEmpty) {
+          throw 'Kullanıcı bulunamadı';
         }
+
+        // Mevcut sohbeti kontrol et
+        final existingChatQuery = await firestore
+            .collection('chats')
+            .where('members', arrayContains: currentUser.email)
+            .get();
+
+        // Aynı kullanıcılarla mevcut bir sohbet var mı kontrol et
+        for (var doc in existingChatQuery.docs) {
+          final members = List<String>.from(doc.data()['members'] ?? []);
+          if (members.length == 2 &&
+              members.contains(_emailController.text.trim()) &&
+              members.contains(currentUser.email)) {
+            if (mounted) {
+              Navigator.pop(context);
+              Navigator.pushNamed(
+                context,
+                '/chat',
+                arguments: {
+                  'chatId': doc.id,
+                  'userEmail': _emailController.text.trim(),
+                },
+              );
+            }
+            return;
+          }
+        }
+
+        // Yeni kişisel sohbet oluştur
+        final chatDoc = await firestore.collection('chats').add({
+          'members': [
+            currentUser.email,
+            _emailController.text.trim(),
+          ],
+          'createdAt': FieldValue.serverTimestamp(),
+          'isGroup': false,
+        });
 
         if (mounted) {
           Navigator.pop(context);
+          Navigator.pushNamed(
+            context,
+            '/chat',
+            arguments: {
+              'chatId': chatDoc.id,
+              'userEmail': _emailController.text.trim(),
+            },
+          );
         }
-      } else {
-        // Birebir sohbet oluşturma kodları aynı kalacak
       }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(

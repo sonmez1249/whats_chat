@@ -7,43 +7,70 @@ import 'pages/home_page.dart';
 import 'pages/settings_page.dart';
 import 'pages/chat_page.dart';
 import 'pages/create_chat_page.dart';
+import 'services/theme_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
+
+  // Theme service'i başlat
+  final themeService = ThemeService();
+  await themeService.init();
+
   runApp(const MyApp());
 }
 
-class MyApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
   const MyApp({super.key});
 
   @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  final _themeService = ThemeService();
+
+  void _handleThemeChange() {
+    setState(() {}); // MaterialApp'i yeniden oluştur
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _themeService.addListener(_handleThemeChange);
+  }
+
+  @override
+  void dispose() {
+    _themeService.removeListener(_handleThemeChange);
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'WhatsChat App',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
-        useMaterial3: true,
-        appBarTheme: const AppBarTheme(
-          centerTitle: true,
-          elevation: 0,
-        ),
-      ),
-      initialRoute:
-          FirebaseAuth.instance.currentUser == null ? '/login' : '/home',
-      routes: {
-        '/login': (context) => const LoginPage(),
-        '/register': (context) => const RegisterPage(),
-        '/home': (context) => const HomePage(),
-        '/settings': (context) => const SettingsPage(),
-        '/chat': (context) {
-          final arguments = ModalRoute.of(context)?.settings.arguments
-              as Map<String, dynamic>;
-          return ChatPage(userName: arguments['userEmail']);
+    return AnimatedBuilder(
+      animation: _themeService,
+      builder: (context, _) => MaterialApp(
+        debugShowCheckedModeBanner: false,
+        title: 'WhatsChat App',
+        themeMode: _themeService.themeMode,
+        theme: _themeService.lightTheme,
+        darkTheme: _themeService.darkTheme,
+        initialRoute:
+            FirebaseAuth.instance.currentUser == null ? '/login' : '/home',
+        routes: {
+          '/login': (context) => const LoginPage(),
+          '/register': (context) => const RegisterPage(),
+          '/home': (context) => const HomePage(),
+          '/settings': (context) => const SettingsPage(),
+          '/chat': (context) {
+            final arguments = ModalRoute.of(context)?.settings.arguments
+                as Map<String, dynamic>;
+            return ChatPage(userName: arguments['userEmail']);
+          },
+          '/create-chat': (context) => const CreateChatPage(),
         },
-        '/create-chat': (context) => const CreateChatPage(),
-      },
+      ),
     );
   }
 }
