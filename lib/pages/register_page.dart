@@ -1,6 +1,7 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class RegisterPage extends StatefulWidget {
   const RegisterPage({super.key});
@@ -14,6 +15,7 @@ class _RegisterPageState extends State<RegisterPage> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
+  final _userNameController = TextEditingController();
   bool _isLoading = false;
   bool _rememberMe = false;
   bool _obscurePassword = true;
@@ -35,10 +37,23 @@ class _RegisterPageState extends State<RegisterPage> {
       });
 
       try {
-        await FirebaseAuth.instance.createUserWithEmailAndPassword(
+        // 1. Firebase Auth'da kullanıcı oluştur
+        final userCredential =
+            await FirebaseAuth.instance.createUserWithEmailAndPassword(
           email: _emailController.text.trim(),
           password: _passwordController.text.trim(),
         );
+
+        // 2. Firestore'a kullanıcı bilgilerini kaydet
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(userCredential.user!.uid)
+            .set({
+          'email': userCredential.user!.email,
+          'userName': _userNameController.text.trim(),
+          'createdAt': FieldValue.serverTimestamp(),
+          'lastSeen': FieldValue.serverTimestamp(),
+        });
 
         if (_rememberMe) {
           await _saveCredentials();
@@ -50,6 +65,10 @@ class _RegisterPageState extends State<RegisterPage> {
       } on FirebaseAuthException catch (e) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(e.message ?? 'Kayıt başarısız')),
+        );
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Hata: $e')),
         );
       } finally {
         if (mounted) {
@@ -231,6 +250,35 @@ class _RegisterPageState extends State<RegisterPage> {
                     ],
                   ),
                   const SizedBox(height: 24),
+                  // Kullanıcı adı alanı
+                  TextFormField(
+                    controller: _userNameController,
+                    decoration: InputDecoration(
+                      labelText: 'Kullanıcı Adı',
+                      prefixIcon: const Icon(Icons.person_outline),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: Colors.grey[300]!),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(
+                          color: Theme.of(context).primaryColor,
+                          width: 2,
+                        ),
+                      ),
+                    ),
+                    validator: (value) {
+                      if (value == null || value.isEmpty) {
+                        return 'Lütfen kullanıcı adı girin';
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 16),
                   // Kayıt ol butonu
                   SizedBox(
                     width: double.infinity,
@@ -299,6 +347,7 @@ class _RegisterPageState extends State<RegisterPage> {
     _emailController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
+    _userNameController.dispose();
     super.dispose();
   }
 }

@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
@@ -23,11 +24,7 @@ class HomePage extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        elevation: 0,
-        title: const Text(
-          'WhatsChat',
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
+        title: const Text('WhatsChat'),
         actions: [
           IconButton(
             icon: const Icon(Icons.search),
@@ -40,33 +37,11 @@ class HomePage extends StatelessWidget {
             onPressed: () => Navigator.pushNamed(context, '/settings'),
           ),
           PopupMenuButton(
-            icon: const Icon(Icons.more_vert),
             itemBuilder: (context) => [
-              const PopupMenuItem(
-                value: 'new_group',
-                child: Row(
-                  children: [
-                    Icon(Icons.group_add, size: 20),
-                    SizedBox(width: 8),
-                    Text('Yeni Grup'),
-                  ],
-                ),
-              ),
-              const PopupMenuItem(
-                value: 'settings',
-                child: Row(
-                  children: [
-                    Icon(Icons.settings, size: 20),
-                    SizedBox(width: 8),
-                    Text('Ayarlar'),
-                  ],
-                ),
-              ),
               PopupMenuItem(
-                value: 'logout',
                 child: const Row(
                   children: [
-                    Icon(Icons.exit_to_app, size: 20),
+                    Icon(Icons.exit_to_app),
                     SizedBox(width: 8),
                     Text('Çıkış Yap'),
                   ],
@@ -113,7 +88,7 @@ class HomePage extends StatelessWidget {
               leading: const Icon(Icons.settings),
               title: const Text('Ayarlar'),
               onTap: () {
-                // Ayarlar sayfasına git
+                Navigator.pushNamed(context, '/settings');
               },
             ),
             const Divider(),
@@ -125,76 +100,127 @@ class HomePage extends StatelessWidget {
           ],
         ),
       ),
-      body: ListView.builder(
-        itemCount: 10, // Örnek veri
-        itemBuilder: (context, index) {
-          return Card(
-            elevation: 0,
-            margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            child: ListTile(
-              leading: CircleAvatar(
-                backgroundColor:
-                    Colors.primaries[index % Colors.primaries.length],
-                child: Text(
-                  'K$index',
-                  style: const TextStyle(color: Colors.white),
-                ),
-              ),
-              title: Text('Kullanıcı $index'),
-              subtitle: Row(
-                children: [
-                  const Icon(
-                    Icons.done_all,
-                    size: 16,
-                    color: Colors.blue,
-                  ),
-                  const SizedBox(width: 4),
-                  Text('Son mesaj $index'),
-                ],
-              ),
-              trailing: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    '12:0$index',
-                    style: TextStyle(
-                      color: Colors.grey[600],
-                      fontSize: 12,
+      body: StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance
+            .collection('chats')
+            .where('members', arrayContains: user?.email)
+            .orderBy('createdAt', descending: true)
+            .snapshots(),
+        builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return Center(child: Text('Hata: ${snapshot.error}'));
+          }
+
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+            return const Center(child: Text('Henüz sohbet yok'));
+          }
+
+          return ListView.builder(
+            itemCount: snapshot.data!.docs.length,
+            itemBuilder: (context, index) {
+              final chat = snapshot.data!.docs[index];
+              final data = chat.data() as Map<String, dynamic>;
+              final isGroup = data['isGroup'] ?? false;
+              final members = List<String>.from(data['members'] ?? []);
+
+              // Sohbet adını belirle
+              String chatName = data['chatName'] ?? '';
+              if (!isGroup && chatName.isEmpty) {
+                // Birebir sohbetlerde diğer kullanıcının mailini göster
+                chatName = members.firstWhere(
+                  (member) => member != user?.email,
+                  orElse: () => 'Bilinmeyen Kullanıcı',
+                );
+              }
+
+              return Card(
+                elevation: 0,
+                margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                child: ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: Theme.of(context).primaryColor,
+                    child: Icon(
+                      isGroup ? Icons.group : Icons.person,
+                      color: Colors.white,
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  if (index % 3 == 0)
-                    Container(
-                      padding: const EdgeInsets.all(6),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).primaryColor,
-                        shape: BoxShape.circle,
+                  title: FutureBuilder<DocumentSnapshot>(
+                    future: FirebaseFirestore.instance
+                        .collection('users')
+                        .where('email', isEqualTo: chatName)
+                        .get()
+                        .then((snapshot) => snapshot.docs.first),
+                    builder: (context, snapshot) {
+                      if (snapshot.hasData) {
+                        final userData =
+                            snapshot.data!.data() as Map<String, dynamic>;
+                        return Text(userData['userName'] ?? chatName);
+                      }
+                      return Text(chatName);
+                    },
+                  ),
+                  subtitle: Row(
+                    children: [
+                      const Icon(
+                        Icons.done_all,
+                        size: 16,
+                        color: Colors.blue,
                       ),
-                      child: Text(
-                        '${index + 1}',
-                        style: const TextStyle(
-                          color: Colors.white,
+                      const SizedBox(width: 4),
+                      Text(isGroup ? 'Grup Sohbeti' : 'Kişisel Sohbet'),
+                    ],
+                  ),
+                  trailing: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        '12:00',
+                        style: TextStyle(
+                          color: Colors.grey[600],
                           fontSize: 12,
                         ),
                       ),
-                    ),
-                ],
-              ),
-              onTap: () {
-                Navigator.pushNamed(
-                  context,
-                  '/chat',
-                  arguments: 'Kullanıcı $index',
-                );
-              },
-            ),
+                      const SizedBox(height: 4),
+                      Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).primaryColor,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Text(
+                          '2',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  onTap: () {
+                    Navigator.pushNamed(
+                      context,
+                      '/chat',
+                      arguments: {
+                        'chatId': chat.id,
+                        'userEmail': chatName,
+                      },
+                    );
+                  },
+                ),
+              );
+            },
           );
         },
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: () {
-          // Yeni sohbet başlat
+          Navigator.pushNamed(context, '/create-chat');
         },
         child: const Icon(Icons.chat),
       ),

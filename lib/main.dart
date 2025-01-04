@@ -6,6 +6,7 @@ import 'pages/register_page.dart';
 import 'pages/home_page.dart';
 import 'pages/settings_page.dart';
 import 'pages/chat_page.dart';
+import 'pages/create_chat_page.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -36,7 +37,12 @@ class MyApp extends StatelessWidget {
         '/register': (context) => const RegisterPage(),
         '/home': (context) => const HomePage(),
         '/settings': (context) => const SettingsPage(),
-        '/chat': (context) => const ChatPage(userName: 'Test User'),
+        '/chat': (context) {
+          final arguments = ModalRoute.of(context)?.settings.arguments
+              as Map<String, dynamic>;
+          return ChatPage(userName: arguments['userEmail']);
+        },
+        '/create-chat': (context) => const CreateChatPage(),
       },
     );
   }
