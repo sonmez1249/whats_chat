@@ -35,6 +35,10 @@ class HomePage extends StatelessWidget {
               // Arama fonksiyonu
             },
           ),
+          IconButton(
+            icon: const Icon(Icons.settings),
+            onPressed: () => Navigator.pushNamed(context, '/settings'),
+          ),
           PopupMenuButton(
             icon: const Icon(Icons.more_vert),
             itemBuilder: (context) => [
@@ -178,7 +182,11 @@ class HomePage extends StatelessWidget {
                 ],
               ),
               onTap: () {
-                // Sohbet sayfasına git
+                Navigator.pushNamed(
+                  context,
+                  '/chat',
+                  arguments: 'Kullanıcı $index',
+                );
               },
             ),
           );
