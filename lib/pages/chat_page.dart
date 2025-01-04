@@ -28,7 +28,23 @@ class _ChatPageState extends State<ChatPage> {
           .doc(chatId)
           .get();
 
-      final isGroup = chatDoc.data()?['isGroup'] ?? false;
+      if (!chatDoc.exists) return;
+
+      final chatData = chatDoc.data()!;
+      final isGroup = chatData['isGroup'] ?? false;
+      final members = List<String>.from(chatData['members'] ?? []);
+      final leftMembers = List<String>.from(chatData['leftMembers'] ?? []);
+
+      // Eğer gruptan çıkmışsa veya üye değilse mesaj gönderemesin
+      if (isGroup && !members.contains(currentUser?.email)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Bu gruba artık mesaj gönderemezsiniz'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
 
       await FirebaseFirestore.instance
           .collection('chats')
@@ -51,23 +67,6 @@ class _ChatPageState extends State<ChatPage> {
 
   // Mesaj silme dialog'unu göster
   Future<void> _showDeleteDialog(String chatId) async {
-    // Seçili mesajların hepsi bana ait mi kontrol et
-    bool allMine = true;
-    for (var messageId in _selectedMessages) {
-      final message = await FirebaseFirestore.instance
-          .collection('chats')
-          .doc(chatId)
-          .collection('messages')
-          .doc(messageId)
-          .get();
-
-      final data = message.data() as Map<String, dynamic>;
-      if (data['senderId'] != currentUser?.email) {
-        allMine = false;
-        break;
-      }
-    }
-
     final result = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -83,37 +82,26 @@ class _ChatPageState extends State<ChatPage> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text(
-              'İptal',
-              style: TextStyle(color: Colors.white70),
-            ),
+            child: const Text('İptal'),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
             child: const Text(
-              'Benden sil',
+              'Sil',
               style: TextStyle(color: Colors.red),
             ),
           ),
-          if (allMine) // Sadece mesajlar bana aitse herkesten silme seçeneği göster
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text(
-                'Herkesten sil',
-                style: TextStyle(color: Colors.red),
-              ),
-            ),
         ],
       ),
     );
 
-    if (result != null) {
-      await _deleteMessages(chatId, result);
+    if (result == true) {
+      await _deleteMessages(chatId);
     }
   }
 
   // Mesajları sil
-  Future<void> _deleteMessages(String chatId, bool onlyForMe) async {
+  Future<void> _deleteMessages(String chatId) async {
     try {
       final batch = FirebaseFirestore.instance.batch();
 
@@ -124,20 +112,7 @@ class _ChatPageState extends State<ChatPage> {
             .collection('messages')
             .doc(messageId);
 
-        // Mesaj sahibini kontrol et
-        final message = await messageRef.get();
-        final data = message.data() as Map<String, dynamic>;
-        final isMyMessage = data['senderId'] == currentUser?.email;
-
-        if (onlyForMe) {
-          // Benden sil seçeneği için
-          batch.update(messageRef, {
-            'deletedFor': FieldValue.arrayUnion([currentUser?.email])
-          });
-        } else if (isMyMessage) {
-          // Herkesten sil seçeneği için (sadece benim mesajlarımı sil)
-          batch.delete(messageRef);
-        }
+        batch.delete(messageRef);
       }
 
       await batch.commit();
