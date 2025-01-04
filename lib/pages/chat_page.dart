@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'group_details_page.dart';
+import '../widgets/reaction_picker.dart';
 
 class ChatPage extends StatefulWidget {
   final String userName;
@@ -28,23 +29,7 @@ class _ChatPageState extends State<ChatPage> {
           .doc(chatId)
           .get();
 
-      if (!chatDoc.exists) return;
-
-      final chatData = chatDoc.data()!;
-      final isGroup = chatData['isGroup'] ?? false;
-      final members = List<String>.from(chatData['members'] ?? []);
-      final leftMembers = List<String>.from(chatData['leftMembers'] ?? []);
-
-      // Eğer gruptan çıkmışsa veya üye değilse mesaj gönderemesin
-      if (isGroup && !members.contains(currentUser?.email)) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Bu gruba artık mesaj gönderemezsiniz'),
-            backgroundColor: Colors.red,
-          ),
-        );
-        return;
-      }
+      final isGroup = chatDoc.data()?['isGroup'] ?? false;
 
       await FirebaseFirestore.instance
           .collection('chats')
@@ -67,6 +52,23 @@ class _ChatPageState extends State<ChatPage> {
 
   // Mesaj silme dialog'unu göster
   Future<void> _showDeleteDialog(String chatId) async {
+    // Seçili mesajların hepsi bana ait mi kontrol et
+    bool allMine = true;
+    for (var messageId in _selectedMessages) {
+      final message = await FirebaseFirestore.instance
+          .collection('chats')
+          .doc(chatId)
+          .collection('messages')
+          .doc(messageId)
+          .get();
+
+      final data = message.data() as Map<String, dynamic>;
+      if (data['senderId'] != currentUser?.email) {
+        allMine = false;
+        break;
+      }
+    }
+
     final result = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -82,26 +84,37 @@ class _ChatPageState extends State<ChatPage> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('İptal'),
+            child: const Text(
+              'İptal',
+              style: TextStyle(color: Colors.white70),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
             child: const Text(
-              'Sil',
+              'Benden sil',
               style: TextStyle(color: Colors.red),
             ),
           ),
+          if (allMine) // Sadece mesajlar bana aitse herkesten silme seçeneği göster
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text(
+                'Herkesten sil',
+                style: TextStyle(color: Colors.red),
+              ),
+            ),
         ],
       ),
     );
 
-    if (result == true) {
-      await _deleteMessages(chatId);
+    if (result != null) {
+      await _deleteMessages(chatId, result);
     }
   }
 
   // Mesajları sil
-  Future<void> _deleteMessages(String chatId) async {
+  Future<void> _deleteMessages(String chatId, bool onlyForMe) async {
     try {
       final batch = FirebaseFirestore.instance.batch();
 
@@ -112,7 +125,20 @@ class _ChatPageState extends State<ChatPage> {
             .collection('messages')
             .doc(messageId);
 
-        batch.delete(messageRef);
+        // Mesaj sahibini kontrol et
+        final message = await messageRef.get();
+        final data = message.data() as Map<String, dynamic>;
+        final isMyMessage = data['senderId'] == currentUser?.email;
+
+        if (onlyForMe) {
+          // Benden sil seçeneği için
+          batch.update(messageRef, {
+            'deletedFor': FieldValue.arrayUnion([currentUser?.email])
+          });
+        } else if (isMyMessage) {
+          // Herkesten sil seçeneği için (sadece benim mesajlarımı sil)
+          batch.delete(messageRef);
+        }
       }
 
       await batch.commit();
@@ -126,6 +152,37 @@ class _ChatPageState extends State<ChatPage> {
         SnackBar(content: Text('Mesajlar silinemedi: $e')),
       );
     }
+  }
+
+  // Reaksiyon widget'larını oluşturan metod
+  List<Widget> _buildReactionWidgets(List reactions) {
+    final Map<String, int> reactionCounts = {};
+
+    for (var reaction in reactions) {
+      final emoji = reaction['emoji'] as String;
+      reactionCounts[emoji] = (reactionCounts[emoji] ?? 0) + 1;
+    }
+
+    return reactionCounts.entries.map((entry) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.3),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(entry.key), // emoji
+            const SizedBox(width: 4),
+            Text(
+              entry.value.toString(),
+              style: const TextStyle(fontSize: 12),
+            ),
+          ],
+        ),
+      );
+    }).toList();
   }
 
   @override
@@ -234,6 +291,31 @@ class _ChatPageState extends State<ChatPage> {
                   icon: const Icon(Icons.more_vert),
                   onPressed: () {},
                 ),
+                IconButton(
+                  icon: const Icon(Icons.info_outline),
+                  onPressed: () {
+                    showDialog(
+                      context: context,
+                      builder: (context) => AlertDialog(
+                        title: const Text('İpuçları'),
+                        content: const Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('• Mesajı silmek için uzun basın'),
+                            Text('• Reaksiyon eklemek için çift tıklayın'),
+                          ],
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context),
+                            child: const Text('Tamam'),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
               ],
       ),
       body: Column(
@@ -293,6 +375,35 @@ class _ChatPageState extends State<ChatPage> {
                               _isSelectionMode = true;
                               _selectedMessages.add(message.id);
                             });
+                          },
+                          onDoubleTap: () {
+                            showModalBottomSheet(
+                              context: context,
+                              builder: (context) => ReactionPicker(
+                                onReactionSelected: (emoji) async {
+                                  final messageRef = FirebaseFirestore.instance
+                                      .collection('chats')
+                                      .doc(chatId)
+                                      .collection('messages')
+                                      .doc(message.id);
+
+                                  await messageRef.update({
+                                    'reactions': FieldValue.arrayUnion([
+                                      {
+                                        'emoji': emoji,
+                                        'userId': currentUser?.email,
+                                        'timestamp':
+                                            FieldValue.serverTimestamp(),
+                                      }
+                                    ])
+                                  });
+
+                                  if (mounted) {
+                                    Navigator.pop(context);
+                                  }
+                                },
+                              ),
+                            );
                           },
                           onTap: _isSelectionMode
                               ? () {
@@ -433,6 +544,17 @@ class _ChatPageState extends State<ChatPage> {
                                             : Colors.grey[600],
                                       ),
                                     ),
+                                    // Reaksiyonları göster
+                                    if (data['reactions'] != null &&
+                                        (data['reactions'] as List).isNotEmpty)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 8),
+                                        child: Wrap(
+                                          spacing: 4,
+                                          children: _buildReactionWidgets(
+                                              data['reactions'] as List),
+                                        ),
+                                      ),
                                   ],
                                 ),
                               ),
