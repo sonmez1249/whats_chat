@@ -18,6 +18,13 @@ class _ChatPageState extends State<ChatPage> {
     if (_messageController.text.trim().isEmpty) return;
 
     try {
+      final chatDoc = await FirebaseFirestore.instance
+          .collection('chats')
+          .doc(chatId)
+          .get();
+
+      final isGroup = chatDoc.data()?['isGroup'] ?? false;
+
       await FirebaseFirestore.instance
           .collection('chats')
           .doc(chatId)
@@ -26,6 +33,7 @@ class _ChatPageState extends State<ChatPage> {
         'text': _messageController.text.trim(),
         'senderId': currentUser?.email,
         'timestamp': FieldValue.serverTimestamp(),
+        'isGroup': isGroup,
       });
 
       _messageController.clear();
@@ -46,50 +54,111 @@ class _ChatPageState extends State<ChatPage> {
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 0,
-        title: FutureBuilder<QuerySnapshot>(
-          future: FirebaseFirestore.instance
-              .collection('users')
-              .where('email', isEqualTo: userEmail)
-              .get(),
-          builder: (context, snapshot) {
-            if (snapshot.hasData && snapshot.data!.docs.isNotEmpty) {
-              final userData =
-                  snapshot.data!.docs.first.data() as Map<String, dynamic>;
-              final userName = userData['userName'] ?? userEmail;
+        title: StreamBuilder<DocumentSnapshot>(
+          stream: FirebaseFirestore.instance
+              .collection('chats')
+              .doc(chatId)
+              .snapshots(),
+          builder: (context, chatSnapshot) {
+            if (!chatSnapshot.hasData) {
+              return const SizedBox();
+            }
 
+            final chatData = chatSnapshot.data!.data() as Map<String, dynamic>;
+            final isGroup = chatData['isGroup'] ?? false;
+            final chatName = isGroup ? chatData['chatName'] : userEmail;
+
+            if (isGroup) {
+              // Grup sohbeti başlığı
               return Row(
                 children: [
                   CircleAvatar(
                     backgroundColor: Theme.of(context).primaryColor,
-                    child: Text(
-                      userName[0].toUpperCase(),
-                      style: const TextStyle(color: Colors.white),
-                    ),
+                    child: const Icon(Icons.group, color: Colors.white),
                   ),
                   const SizedBox(width: 12),
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        userName,
+                        chatName,
                         style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
                       Text(
-                        'Çevrimiçi',
+                        '${chatData['members']?.length ?? 0} üye',
                         style: TextStyle(
                           fontSize: 12,
-                          color: Colors.green[600],
+                          color: Colors.grey[600],
                         ),
                       ),
                     ],
                   ),
                 ],
               );
+            } else {
+              // Birebir sohbet başlığı
+              return FutureBuilder<QuerySnapshot>(
+                future: FirebaseFirestore.instance
+                    .collection('users')
+                    .where('email', isEqualTo: userEmail)
+                    .get(),
+                builder: (context, snapshot) {
+                  if (snapshot.hasData && snapshot.data!.docs.isNotEmpty) {
+                    final userData = snapshot.data!.docs.first.data()
+                        as Map<String, dynamic>;
+                    final userName = userData['userName'] ?? userEmail;
+
+                    return Row(
+                      children: [
+                        CircleAvatar(
+                          backgroundColor: Theme.of(context).primaryColor,
+                          child: Text(
+                            userName[0].toUpperCase(),
+                            style: const TextStyle(color: Colors.white),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              userName,
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            Text(
+                              'Çevrimiçi',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.green[600],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    );
+                  }
+                  return Row(
+                    children: [
+                      CircleAvatar(
+                        backgroundColor: Theme.of(context).primaryColor,
+                        child: Text(
+                          userEmail[0].toUpperCase(),
+                          style: const TextStyle(color: Colors.white),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Text(userEmail),
+                    ],
+                  );
+                },
+              );
             }
-            return const CircularProgressIndicator();
           },
         ),
         actions: [
@@ -110,71 +179,169 @@ class _ChatPageState extends State<ChatPage> {
       body: Column(
         children: [
           Expanded(
-            child: StreamBuilder<QuerySnapshot>(
+            child: StreamBuilder<DocumentSnapshot>(
               stream: FirebaseFirestore.instance
                   .collection('chats')
                   .doc(chatId)
-                  .collection('messages')
-                  .orderBy('timestamp', descending: true)
                   .snapshots(),
-              builder: (context, snapshot) {
-                if (snapshot.hasError) {
-                  return Center(child: Text('Hata: ${snapshot.error}'));
+              builder: (context, chatSnapshot) {
+                if (!chatSnapshot.hasData) {
+                  return const SizedBox();
                 }
 
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
+                final chatData =
+                    chatSnapshot.data!.data() as Map<String, dynamic>;
+                final isGroupChat = chatData['isGroup'] ?? false;
 
-                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                  return const Center(child: Text('Henüz mesaj yok'));
-                }
+                return StreamBuilder<QuerySnapshot>(
+                  stream: FirebaseFirestore.instance
+                      .collection('chats')
+                      .doc(chatId)
+                      .collection('messages')
+                      .orderBy('timestamp', descending: true)
+                      .snapshots(),
+                  builder: (context, snapshot) {
+                    if (snapshot.hasError) {
+                      return Center(child: Text('Hata: ${snapshot.error}'));
+                    }
 
-                return ListView.builder(
-                  reverse: true,
-                  padding: const EdgeInsets.all(16),
-                  itemCount: snapshot.data!.docs.length,
-                  itemBuilder: (context, index) {
-                    final message = snapshot.data!.docs[index];
-                    final data = message.data() as Map<String, dynamic>;
-                    final isMe = data['senderId'] == currentUser?.email;
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const SizedBox();
+                    }
 
-                    return Align(
-                      alignment:
-                          isMe ? Alignment.centerRight : Alignment.centerLeft,
-                      child: Container(
-                        margin: const EdgeInsets.only(bottom: 8),
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: isMe
-                              ? Theme.of(context).primaryColor
-                              : Colors.grey[200],
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: isMe
-                              ? CrossAxisAlignment.end
-                              : CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              data['text'] ?? '',
-                              style: TextStyle(
-                                color: isMe ? Colors.white : Colors.black,
-                              ),
+                    if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                      return const Center(child: Text('Henüz mesaj yok'));
+                    }
+
+                    return ListView.builder(
+                      reverse: true,
+                      padding: const EdgeInsets.all(16),
+                      itemCount: snapshot.data!.docs.length,
+                      itemBuilder: (context, index) {
+                        final message = snapshot.data!.docs[index];
+                        final data = message.data() as Map<String, dynamic>;
+                        final isMe = data['senderId'] == currentUser?.email;
+
+                        return Align(
+                          alignment: isMe
+                              ? Alignment.centerRight
+                              : Alignment.centerLeft,
+                          child: Container(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: isMe
+                                  ? Theme.of(context).primaryColor
+                                  : Colors.grey[200],
+                              borderRadius: BorderRadius.circular(16),
                             ),
-                            const SizedBox(height: 4),
-                            Text(
-                              data['timestamp'] != null
-                                  ? '${(data['timestamp'] as Timestamp).toDate().hour}:${(data['timestamp'] as Timestamp).toDate().minute}'
-                                  : '',
-                              style: TextStyle(
-                                fontSize: 10,
-                                color: isMe ? Colors.white70 : Colors.grey[600],
-                              ),
+                            child: Column(
+                              crossAxisAlignment: isMe
+                                  ? CrossAxisAlignment.end
+                                  : CrossAxisAlignment.start,
+                              children: [
+                                if (!isMe && isGroupChat) ...[
+                                  FutureBuilder<QuerySnapshot>(
+                                    future: FirebaseFirestore.instance
+                                        .collection('users')
+                                        .where('email',
+                                            isEqualTo: data['senderId'])
+                                        .get(),
+                                    builder: (context, userSnapshot) {
+                                      if (userSnapshot.hasData &&
+                                          userSnapshot.data != null &&
+                                          userSnapshot.data!.docs.isNotEmpty) {
+                                        final userData =
+                                            userSnapshot.data!.docs.first.data()
+                                                as Map<String, dynamic>;
+                                        return Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            CircleAvatar(
+                                              radius: 10,
+                                              backgroundColor: Theme.of(context)
+                                                  .primaryColor
+                                                  .withOpacity(0.5),
+                                              child: Text(
+                                                (userData['userName'] ??
+                                                        data['senderId'])[0]
+                                                    .toUpperCase(),
+                                                style: const TextStyle(
+                                                  fontSize: 12,
+                                                  color: Colors.white,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 4),
+                                            Text(
+                                              userData['userName'] ??
+                                                  data['senderId'],
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.grey[600],
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ],
+                                        );
+                                      }
+                                      return Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          CircleAvatar(
+                                            radius: 10,
+                                            backgroundColor: Theme.of(context)
+                                                .primaryColor
+                                                .withOpacity(0.5),
+                                            child: Text(
+                                              (data['senderId'] ?? '')[0]
+                                                  .toUpperCase(),
+                                              style: const TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.white,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            data['senderId'] ?? '',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.grey[600],
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ],
+                                      );
+                                    },
+                                  ),
+                                  const SizedBox(height: 4),
+                                ],
+                                Text(
+                                  data['text'] ?? '',
+                                  style: TextStyle(
+                                    color: isMe ? Colors.white : Colors.black,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  data['timestamp'] != null
+                                      ? '${(data['timestamp'] as Timestamp).toDate().hour}:${(data['timestamp'] as Timestamp).toDate().minute.toString().padLeft(2, '0')}'
+                                      : '',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    color: isMe
+                                        ? Colors.white70
+                                        : Colors.grey[600],
+                                  ),
+                                ),
+                              ],
                             ),
-                          ],
-                        ),
-                      ),
+                          ),
+                        );
+                      },
                     );
                   },
                 );

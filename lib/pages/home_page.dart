@@ -148,31 +148,24 @@ class HomePage extends StatelessWidget {
                       color: Colors.white,
                     ),
                   ),
-                  title: FutureBuilder<DocumentSnapshot>(
-                    future: FirebaseFirestore.instance
+                  title: StreamBuilder<QuerySnapshot>(
+                    stream: FirebaseFirestore.instance
                         .collection('users')
                         .where('email', isEqualTo: chatName)
-                        .get()
-                        .then((snapshot) => snapshot.docs.first),
+                        .snapshots(),
                     builder: (context, snapshot) {
-                      if (snapshot.hasData) {
-                        final userData =
-                            snapshot.data!.data() as Map<String, dynamic>;
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return Text(chatName);
+                      }
+
+                      if (snapshot.hasData &&
+                          snapshot.data?.docs.isNotEmpty == true) {
+                        final userData = snapshot.data?.docs.first.data()
+                            as Map<String, dynamic>;
                         return Text(userData['userName'] ?? chatName);
                       }
                       return Text(chatName);
                     },
-                  ),
-                  subtitle: Row(
-                    children: [
-                      const Icon(
-                        Icons.done_all,
-                        size: 16,
-                        color: Colors.blue,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(isGroup ? 'Grup Sohbeti' : 'Kişisel Sohbet'),
-                    ],
                   ),
                   trailing: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
