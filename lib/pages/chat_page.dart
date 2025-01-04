@@ -3,7 +3,11 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'group_details_page.dart';
 import '../widgets/reaction_picker.dart';
-import '../models/message_builder.dart';
+import '../models/messages/message.dart';
+import '../models/messages/chat_message_factory.dart';
+import 'dart:io';
+import 'package:image_picker/image_picker.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 
 class ChatPage extends StatefulWidget {
   final String userName;
@@ -16,42 +20,47 @@ class ChatPage extends StatefulWidget {
 class _ChatPageState extends State<ChatPage> {
   final _messageController = TextEditingController();
   final currentUser = FirebaseAuth.instance.currentUser;
+  final _messageFactory = ChatMessageFactory();
 
   // Seçili mesajları tutmak için
   final Set<String> _selectedMessages = {};
   bool _isSelectionMode = false;
 
-  Future<void> _sendMessage(String chatId) async {
-    if (_messageController.text.trim().isEmpty) return;
+  final ImagePicker _picker = ImagePicker();
 
+  Future<void> _sendMessage(String chatId, Message message) async {
     try {
-      final chatDoc = await FirebaseFirestore.instance
-          .collection('chats')
-          .doc(chatId)
-          .get();
-
-      final isGroup = chatDoc.data()?['isGroup'] ?? false;
-
-      // Builder pattern kullanarak mesaj oluştur
-      final message = MessageBuilder()
-          .setText(_messageController.text.trim())
-          .setSender(currentUser?.email ?? '')
-          .setIsGroup(isGroup)
-          .setTimestamp(DateTime.now())
-          .build();
-
       await FirebaseFirestore.instance
           .collection('chats')
           .doc(chatId)
           .collection('messages')
           .add(message.toMap());
-
-      _messageController.clear();
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Mesaj gönderilemedi: $e')),
       );
     }
+  }
+
+  void _sendTextMessage(String chatId) {
+    if (_messageController.text.trim().isEmpty) return;
+
+    final message = _messageFactory.createTextMessage(
+      senderId: currentUser?.email ?? '',
+      text: _messageController.text.trim(),
+    );
+
+    _sendMessage(chatId, message);
+    _messageController.clear();
+  }
+
+  void _sendImageMessage(String chatId, String imageUrl) {
+    final message = _messageFactory.createImageMessage(
+      senderId: currentUser?.email ?? '',
+      imageUrl: imageUrl,
+    );
+
+    _sendMessage(chatId, message);
   }
 
   // Mesaj silme dialog'unu göster
@@ -190,6 +199,168 @@ class _ChatPageState extends State<ChatPage> {
             ),
           );
         }).toList(),
+      ),
+    );
+  }
+
+  // Resim seçme ve yükleme fonksiyonu
+  Future<void> _pickAndUploadImage(String chatId) async {
+    try {
+      final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
+      if (image == null) return;
+
+      // Yükleme başladı bildirimi
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Resim yükleniyor...')),
+      );
+
+      // Storage'a yükle
+      final storageRef = FirebaseStorage.instance
+          .ref()
+          .child('chat_images')
+          .child(chatId)
+          .child('${DateTime.now().millisecondsSinceEpoch}.jpg');
+
+      await storageRef.putFile(File(image.path));
+      final imageUrl = await storageRef.getDownloadURL();
+
+      // Mesaj olarak gönder
+      final message = _messageFactory.createImageMessage(
+        senderId: currentUser?.email ?? '',
+        imageUrl: imageUrl,
+      );
+
+      await _sendMessage(chatId, message);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Resim gönderildi')),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Resim yüklenemedi: $e')),
+      );
+    }
+  }
+
+  Future<void> _pickAndUploadImageFromCamera(String chatId) async {
+    try {
+      final XFile? image = await _picker.pickImage(source: ImageSource.camera);
+      if (image == null) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Fotoğraf yükleniyor...')),
+      );
+
+      final storageRef = FirebaseStorage.instance
+          .ref()
+          .child('chat_images')
+          .child(chatId)
+          .child('${DateTime.now().millisecondsSinceEpoch}.jpg');
+
+      await storageRef.putFile(File(image.path));
+      final imageUrl = await storageRef.getDownloadURL();
+
+      final message = _messageFactory.createImageMessage(
+        senderId: currentUser?.email ?? '',
+        imageUrl: imageUrl,
+      );
+
+      await _sendMessage(chatId, message);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Fotoğraf gönderildi')),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Fotoğraf yüklenemedi: $e')),
+      );
+    }
+  }
+
+  // Eklenti butonuna tıklandığında gösterilecek menü
+  void _showAttachmentOptions(String chatId) {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.photo),
+            title: const Text('Galeri'),
+            onTap: () {
+              Navigator.pop(context);
+              _pickAndUploadImage(chatId);
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.camera_alt),
+            title: const Text('Kamera'),
+            onTap: () {
+              Navigator.pop(context);
+              _pickAndUploadImageFromCamera(chatId);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Mesaj içeriğini gösteren widget
+  Widget _buildMessageContent(Map<String, dynamic> data, bool isMe) {
+    switch (data['type']) {
+      case 'image':
+        return _buildImageMessage(data['imageUrl']);
+      default: // text message
+        return Text(
+          data['text'] ?? '',
+          style: TextStyle(
+            color: isMe ? Colors.white : Colors.black,
+          ),
+        );
+    }
+  }
+
+  Widget _buildImageMessage(String imageUrl) {
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 200),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Image.network(
+              imageUrl,
+              loadingBuilder: (context, child, loadingProgress) {
+                if (loadingProgress == null) return child;
+                return Container(
+                  width: 200,
+                  height: 200,
+                  color: Colors.grey[200],
+                  child: Center(
+                    child: CircularProgressIndicator(
+                      value: loadingProgress.expectedTotalBytes != null
+                          ? loadingProgress.cumulativeBytesLoaded /
+                              loadingProgress.expectedTotalBytes!
+                          : null,
+                    ),
+                  ),
+                );
+              },
+              errorBuilder: (context, error, stackTrace) {
+                return Container(
+                  width: 200,
+                  height: 200,
+                  color: Colors.grey[200],
+                  child: const Icon(Icons.error),
+                );
+              },
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -598,14 +769,7 @@ class _ChatPageState extends State<ChatPage> {
                                           ),
                                           const SizedBox(height: 4),
                                         ],
-                                        Text(
-                                          data['text'] ?? '',
-                                          style: TextStyle(
-                                            color: isMe
-                                                ? Colors.white
-                                                : Colors.black,
-                                          ),
-                                        ),
+                                        _buildMessageContent(data, isMe),
                                         const SizedBox(height: 4),
                                         Row(
                                           mainAxisAlignment: isMe
@@ -667,7 +831,7 @@ class _ChatPageState extends State<ChatPage> {
               children: [
                 IconButton(
                   icon: const Icon(Icons.attach_file),
-                  onPressed: () {},
+                  onPressed: () => _showAttachmentOptions(chatId),
                 ),
                 Expanded(
                   child: TextField(
@@ -690,7 +854,7 @@ class _ChatPageState extends State<ChatPage> {
                 IconButton(
                   icon: const Icon(Icons.send),
                   color: Theme.of(context).primaryColor,
-                  onPressed: () => _sendMessage(chatId),
+                  onPressed: () => _sendTextMessage(chatId),
                 ),
               ],
             ),

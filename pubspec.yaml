@@ -43,6 +43,8 @@ dependencies:
   # firebase_analytics: ^...
   # firebase_auth: ^...
   shared_preferences: ^2.2.2
+  firebase_storage: ^11.6.0
+  image_picker: ^1.0.7  # Resim seçmek için
 
 dev_dependencies:
   flutter_test:
