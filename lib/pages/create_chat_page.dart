@@ -16,6 +16,7 @@ class _CreateChatPageState extends State<CreateChatPage> {
   bool _isGroup = false;
   bool _isLoading = false;
   List<String> _selectedEmails = []; // Seçilen kullanıcıların emailleri
+  List<String> selectedUsers = [];
 
   Future<void> _addUserToGroup() async {
     if (_emailController.text.isEmpty) return;
@@ -142,123 +143,237 @@ class _CreateChatPageState extends State<CreateChatPage> {
     }
   }
 
+  Future<void> createGroup() async {
+    if (_groupNameController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Grup adı boş olamaz')),
+      );
+      return;
+    }
+
+    if (_selectedEmails.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('En az bir kullanıcı seçmelisiniz')),
+      );
+      return;
+    }
+
+    try {
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) return;
+
+      // Grup üyelerine current user'ı da ekle
+      final members = [..._selectedEmails, currentUser.email!];
+
+      // Grubu chats koleksiyonunda oluştur
+      final chatDoc = await FirebaseFirestore.instance.collection('chats').add({
+        'name': _groupNameController.text.trim(),
+        'members': members,
+        'createdBy': currentUser.email,
+        'createdAt': FieldValue.serverTimestamp(),
+        'isGroup': true,
+        'lastMessage': null,
+        'lastMessageTime': null
+      });
+
+      if (mounted) {
+        Navigator.pop(context);
+        Navigator.pushNamed(
+          context,
+          '/chat',
+          arguments: {
+            'chatId': chatDoc.id,
+            'userEmail': _groupNameController.text.trim(),
+            'isGroup': true,
+          },
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Grup oluşturulurken hata: $e')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_isGroup ? 'Grup Oluştur' : 'Kişisel Sohbet'),
-      ),
-      body: Form(
-        key: _formKey,
-        child: ListView(
-          padding: const EdgeInsets.all(16),
+    return DefaultTabController(
+      length: 2,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Sohbet Oluştur'),
+          bottom: const TabBar(
+            tabs: [
+              Tab(text: 'Kişisel Sohbet'),
+              Tab(text: 'Grup Sohbeti'),
+            ],
+          ),
+        ),
+        body: TabBarView(
           children: [
-            // Grup/Kişisel seçimi
-            SegmentedButton<bool>(
-              segments: const [
-                ButtonSegment(
-                  value: false,
-                  label: Text('Kişisel Sohbet'),
-                  icon: Icon(Icons.person),
-                ),
-                ButtonSegment(
-                  value: true,
-                  label: Text('Grup Sohbeti'),
-                  icon: Icon(Icons.group),
+            // Kişisel sohbet sekmesi
+            _buildPersonalChat(),
+            // Grup sohbeti sekmesi
+            _buildGroupChat(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGroupChat() {
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Column(
+        children: [
+          // Grup adı girişi
+          TextField(
+            controller: _groupNameController,
+            decoration: const InputDecoration(
+              labelText: 'Grup Adı',
+              border: OutlineInputBorder(),
+              prefixIcon: Icon(Icons.group),
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // E-posta girişi
+          TextField(
+            controller: _emailController,
+            decoration: const InputDecoration(
+              labelText: 'Kullanıcı E-postası',
+              border: OutlineInputBorder(),
+              prefixIcon: Icon(Icons.email),
+              hintText: 'Eklemek istediğiniz kullanıcının e-postası',
+            ),
+          ),
+          const SizedBox(height: 8),
+
+          // Ekle butonu
+          ElevatedButton.icon(
+            onPressed: _addUserToGroup,
+            icon: const Icon(Icons.add),
+            label: const Text('Kullanıcı Ekle'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Theme.of(context).primaryColor,
+              foregroundColor: Colors.white,
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // Seçili kullanıcılar başlığı
+          if (_selectedEmails.isNotEmpty) ...[
+            Row(
+              children: [
+                const Icon(Icons.people, size: 20),
+                const SizedBox(width: 8),
+                Text(
+                  'Seçili Kullanıcılar (${_selectedEmails.length})',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ],
-              selected: {_isGroup},
-              onSelectionChanged: (Set<bool> selected) {
-                setState(() {
-                  _isGroup = selected.first;
-                  _selectedEmails.clear();
-                });
-              },
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 8),
+          ],
 
-            if (_isGroup) ...[
-              // Grup adı alanı
-              TextFormField(
-                controller: _groupNameController,
-                decoration: const InputDecoration(
-                  labelText: 'Grup Adı',
-                  border: OutlineInputBorder(),
-                ),
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Lütfen grup adı girin';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-
-              // Kullanıcı ekleme alanı
-              Row(
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _emailController,
-                      decoration: const InputDecoration(
-                        labelText: 'Kullanıcı E-postası',
-                        border: OutlineInputBorder(),
+          // Seçili kullanıcılar listesi
+          Expanded(
+            child: _selectedEmails.isEmpty
+                ? Center(
+                    child: Text(
+                      'Henüz kullanıcı eklenmedi',
+                      style: TextStyle(
+                        color: Colors.grey[600],
+                        fontSize: 16,
                       ),
                     ),
+                  )
+                : ListView.builder(
+                    itemCount: _selectedEmails.length,
+                    itemBuilder: (context, index) {
+                      final email = _selectedEmails[index];
+                      return Card(
+                        elevation: 1,
+                        margin: const EdgeInsets.symmetric(vertical: 4),
+                        child: ListTile(
+                          leading: CircleAvatar(
+                            backgroundColor: Theme.of(context).primaryColor,
+                            child: const Icon(Icons.person, color: Colors.white),
+                          ),
+                          title: Text(email),
+                          trailing: IconButton(
+                            icon: const Icon(Icons.remove_circle_outline),
+                            color: Colors.red,
+                            onPressed: () {
+                              setState(() {
+                                _selectedEmails.remove(email);
+                              });
+                            },
+                          ),
+                        ),
+                      );
+                    },
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.add),
-                    onPressed: _addUserToGroup,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
+          ),
 
-              // Seçilen kullanıcılar listesi
-              ..._selectedEmails.map((email) => ListTile(
-                    leading: const Icon(Icons.person),
-                    title: Text(email),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.remove),
-                      onPressed: () {
-                        setState(() {
-                          _selectedEmails.remove(email);
-                        });
-                      },
-                    ),
-                  )),
-            ] else ...[
-              // Birebir sohbet için email alanı
-              TextFormField(
-                controller: _emailController,
-                decoration: const InputDecoration(
-                  labelText: 'Kullanıcı E-postası',
-                  border: OutlineInputBorder(),
+          // Oluştur butonu
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: ElevatedButton(
+              onPressed: _selectedEmails.isEmpty ? null : createGroup,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Theme.of(context).primaryColor,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
                 ),
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Lütfen e-posta girin';
-                  }
-                  if (!value.contains('@')) {
-                    return 'Geçerli bir e-posta girin';
-                  }
-                  return null;
-                },
               ),
-            ],
-
-            const SizedBox(height: 24),
-
-            // Oluştur butonu
-            SizedBox(
-              width: double.infinity,
-              height: 50,
-              child: ElevatedButton(
-                onPressed: _isLoading ? null : _createChat,
-                child: _isLoading
-                    ? const CircularProgressIndicator()
-                    : const Text('Oluştur'),
+              child: const Text(
+                'Grup Oluştur',
+                style: TextStyle(fontSize: 16),
               ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Mevcut kişisel sohbet widget'ı
+  Widget _buildPersonalChat() {
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Form(
+        key: _formKey,
+        child: Column(
+          children: [
+            TextFormField(
+              controller: _emailController,
+              decoration: const InputDecoration(
+                labelText: 'Kullanıcı E-postası',
+                border: OutlineInputBorder(),
+              ),
+              validator: (value) {
+                if (value == null || value.isEmpty) {
+                  return 'Lütfen bir e-posta adresi girin';
+                }
+                if (!value.contains('@')) {
+                  return 'Geçerli bir e-posta adresi girin';
+                }
+                return null;
+              },
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton(
+              onPressed: _isLoading ? null : _createChat,
+              child: _isLoading
+                  ? const CircularProgressIndicator()
+                  : const Text('Sohbet Başlat'),
             ),
           ],
         ),

@@ -7,6 +7,8 @@ import 'pages/home_page.dart';
 import 'pages/settings_page.dart';
 import 'pages/chat_page.dart';
 import 'pages/create_chat_page.dart';
+import 'pages/admin_page.dart';
+import 'pages/user_settings_page.dart';
 import 'services/theme_service.dart';
 
 void main() async {
@@ -62,13 +64,17 @@ class _MyAppState extends State<MyApp> {
           '/login': (context) => const LoginPage(),
           '/register': (context) => const RegisterPage(),
           '/home': (context) => const HomePage(),
-          '/settings': (context) => const SettingsPage(),
+          '/admin': (context) => const AdminPage(),
+          '/create-chat': (context) => const CreateChatPage(),
+          '/settings': (context) => const UserSettingsPage(),
           '/chat': (context) {
             final arguments = ModalRoute.of(context)?.settings.arguments
                 as Map<String, dynamic>;
-            return ChatPage(userName: arguments['userEmail']);
+            return ChatPage(
+              userName: arguments['userEmail'],
+              isGroup: arguments['isGroup'] ?? false,
+            );
           },
-          '/create-chat': (context) => const CreateChatPage(),
         },
       ),
     );

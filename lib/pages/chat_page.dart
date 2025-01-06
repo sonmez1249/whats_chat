@@ -8,10 +8,17 @@ import '../models/messages/chat_message_factory.dart';
 import 'dart:io';
 import 'package:image_picker/image_picker.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'user_details_page.dart';
 
 class ChatPage extends StatefulWidget {
   final String userName;
-  const ChatPage({super.key, required this.userName});
+  final bool isGroup;
+
+  const ChatPage({
+    Key? key,
+    required this.userName,
+    this.isGroup = false,
+  }) : super(key: key);
 
   @override
   State<ChatPage> createState() => _ChatPageState();
@@ -82,47 +89,61 @@ class _ChatPageState extends State<ChatPage> {
       }
     }
 
-    final result = await showDialog<bool>(
+    String deleteOption = 'me'; // Varsayılan olarak 'Benden sil'
+
+    final result = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: Colors.grey[900],
-        title: const Text(
-          'Mesaj silinsin mi?',
-          style: TextStyle(color: Colors.white),
-        ),
-        content: const Text(
-          'Mesajları silmek istediğinize emin misiniz?',
-          style: TextStyle(color: Colors.white70),
-        ),
+        backgroundColor: Colors.white,
+        title: const Text('Mesaj silinsin mi?'),
+        content: const Text('Mesajları herkesten veya yalnızca kendinizden silebilirsiniz.'),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text(
-              'İptal',
-              style: TextStyle(color: Colors.white70),
-            ),
+          StatefulBuilder(
+            builder: (context, setState) {
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  RadioListTile<String>(
+                    title: const Text('Benden sil'),
+                    value: 'me',
+                    groupValue: deleteOption,
+                    onChanged: (value) {
+                      setState(() => deleteOption = value!);
+                    },
+                  ),
+                  // Sadece tüm mesajlar bana aitse "Herkesten sil" seçeneğini göster
+                  if (allMine)
+                    RadioListTile<String>(
+                      title: const Text('Herkesten sil'),
+                      value: 'everyone',
+                      groupValue: deleteOption,
+                      onChanged: (value) {
+                        setState(() => deleteOption = value!);
+                      },
+                    ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('İptal'),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, deleteOption),
+                        child: const Text('Sil'),
+                      ),
+                    ],
+                  ),
+                ],
+              );
+            },
           ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text(
-              'Benden sil',
-              style: TextStyle(color: Colors.red),
-            ),
-          ),
-          if (allMine) // Sadece mesajlar bana aitse herkesten silme seçeneği göster
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text(
-                'Herkesten sil',
-                style: TextStyle(color: Colors.red),
-              ),
-            ),
         ],
       ),
     );
 
     if (result != null) {
-      await _deleteMessages(chatId, result);
+      await _deleteMessages(chatId, result == 'me');
     }
   }
 
@@ -161,9 +182,11 @@ class _ChatPageState extends State<ChatPage> {
         _isSelectionMode = false;
       });
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Mesajlar silinemedi: $e')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Mesajlar silinemedi: $e')),
+        );
+      }
     }
   }
 
@@ -367,14 +390,13 @@ class _ChatPageState extends State<ChatPage> {
 
   @override
   Widget build(BuildContext context) {
-    final arguments =
-        ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>;
-    final chatId = arguments['chatId'] as String;
-    final userEmail = arguments['userEmail'] as String;
+    final args = ModalRoute.of(context)!.settings.arguments as Map<String, dynamic>;
+    final chatId = args['chatId'] as String;
+    final isGroup = args['isGroup'] as bool? ?? false;
+    final displayName = args['userEmail'] as String;
 
     return Scaffold(
       appBar: AppBar(
-        titleSpacing: 0,
         leading: _isSelectionMode
             ? IconButton(
                 icon: const Icon(Icons.close),
@@ -385,108 +407,74 @@ class _ChatPageState extends State<ChatPage> {
                   });
                 },
               )
-            : null,
+            : Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.arrow_back),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                  CircleAvatar(
+                    backgroundColor: Theme.of(context).primaryColor,
+                    child: Icon(
+                      isGroup ? Icons.group : Icons.person,
+                      color: Colors.white,
+                      size: 20,
+                    ),
+                  ),
+                ],
+              ),
+        leadingWidth: _isSelectionMode ? 56 : 96,
         title: _isSelectionMode
             ? Text('${_selectedMessages.length} seçildi')
-            : StreamBuilder<DocumentSnapshot>(
-                stream: FirebaseFirestore.instance
-                    .collection('chats')
-                    .doc(chatId)
-                    .snapshots(),
-                builder: (context, chatSnapshot) {
-                  if (!chatSnapshot.hasData) {
-                    return const Text('Yükleniyor...');
+            : GestureDetector(
+                onTap: () {
+                  if (isGroup) {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => GroupDetailsPage(
+                          chatId: chatId,
+                          groupName: displayName,
+                        ),
+                      ),
+                    );
+                  } else {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => UserDetailsPage(
+                          chatId: chatId,
+                          userEmail: args['userEmail'],
+                        ),
+                      ),
+                    );
                   }
-
-                  final chatData =
-                      chatSnapshot.data!.data() as Map<String, dynamic>;
-                  final isGroup = chatData['isGroup'] ?? false;
-
-                  return GestureDetector(
-                    onTap: isGroup
-                        ? () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (context) => GroupDetailsPage(
-                                  chatId: chatId,
-                                  groupName: chatData['chatName'],
-                                  members: List<String>.from(
-                                      chatData['members'] ?? []),
-                                  createdBy: chatData['createdBy'],
-                                ),
-                              ),
-                            );
-                          }
-                        : null,
-                    child: Row(
-                      children: [
-                        CircleAvatar(
-                          backgroundColor: Theme.of(context).primaryColor,
-                          radius: 20,
-                          child: isGroup
-                              ? const Icon(Icons.group, color: Colors.white)
-                              : Text(
-                                  userEmail[0].toUpperCase(),
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              if (isGroup) ...[
-                                Text(
-                                  chatData['chatName'] ?? '',
-                                  style: const TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                Text(
-                                  '${chatData['members']?.length ?? 0} üye',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.grey[600],
-                                  ),
-                                ),
-                              ] else
-                                StreamBuilder<QuerySnapshot>(
-                                  stream: FirebaseFirestore.instance
-                                      .collection('users')
-                                      .where('email', isEqualTo: userEmail)
-                                      .snapshots(),
-                                  builder: (context, userSnapshot) {
-                                    String displayName = userEmail;
-                                    if (userSnapshot.hasData &&
-                                        userSnapshot.data!.docs.isNotEmpty) {
-                                      final userData =
-                                          userSnapshot.data!.docs.first.data()
-                                              as Map<String, dynamic>;
-                                      displayName =
-                                          userData['userName'] ?? userEmail;
-                                    }
-                                    return Text(
-                                      displayName,
-                                      style: const TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    );
-                                  },
-                                ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
                 },
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      displayName,
+                      style: const TextStyle(fontSize: 16),
+                    ),
+                    if (isGroup)
+                      StreamBuilder<DocumentSnapshot>(
+                        stream: FirebaseFirestore.instance
+                            .collection('chats')
+                            .doc(chatId)
+                            .snapshots(),
+                        builder: (context, snapshot) {
+                          if (!snapshot.hasData) return const SizedBox.shrink();
+                          final data = snapshot.data!.data() as Map<String, dynamic>?;
+                          final members = List<String>.from(data?['members'] ?? []);
+                          return Text(
+                            '${members.length} üye',
+                            style: const TextStyle(fontSize: 12),
+                          );
+                        },
+                      ),
+                  ],
+                ),
               ),
         actions: _isSelectionMode
             ? [
@@ -496,41 +484,23 @@ class _ChatPageState extends State<ChatPage> {
                 ),
               ]
             : [
-                IconButton(
-                  icon: const Icon(Icons.video_call),
-                  onPressed: () {},
-                ),
+                if (isGroup) 
+                  IconButton(
+                    icon: const Icon(Icons.videocam),
+                    onPressed: () {
+                      // Grup görüntülü arama işlevi
+                    },
+                  ),
                 IconButton(
                   icon: const Icon(Icons.call),
-                  onPressed: () {},
+                  onPressed: () {
+                    // Arama işlevi
+                  },
                 ),
                 IconButton(
                   icon: const Icon(Icons.more_vert),
-                  onPressed: () {},
-                ),
-                IconButton(
-                  icon: const Icon(Icons.info_outline),
                   onPressed: () {
-                    showDialog(
-                      context: context,
-                      builder: (context) => AlertDialog(
-                        title: const Text('İpuçları'),
-                        content: const Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('• Mesajı silmek için uzun basın'),
-                            Text('• Reaksiyon eklemek için çift tıklayın'),
-                          ],
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(context),
-                            child: const Text('Tamam'),
-                          ),
-                        ],
-                      ),
-                    );
+                    // Diğer seçenekler menüsü
                   },
                 ),
               ],
@@ -687,83 +657,24 @@ class _ChatPageState extends State<ChatPage> {
                                                     isEqualTo: data['senderId'])
                                                 .get(),
                                             builder: (context, userSnapshot) {
-                                              if (userSnapshot.hasData &&
-                                                  userSnapshot.data != null &&
-                                                  userSnapshot
-                                                      .data!.docs.isNotEmpty) {
-                                                final userData = userSnapshot
-                                                        .data!.docs.first
-                                                        .data()
-                                                    as Map<String, dynamic>;
-                                                return Row(
-                                                  mainAxisSize:
-                                                      MainAxisSize.min,
-                                                  children: [
-                                                    CircleAvatar(
-                                                      radius: 10,
-                                                      backgroundColor:
-                                                          Theme.of(context)
-                                                              .primaryColor
-                                                              .withOpacity(0.5),
-                                                      child: Text(
-                                                        (userData['userName'] ??
-                                                                data[
-                                                                    'senderId'])[0]
-                                                            .toUpperCase(),
-                                                        style: const TextStyle(
-                                                          fontSize: 12,
-                                                          color: Colors.white,
-                                                          fontWeight:
-                                                              FontWeight.bold,
-                                                        ),
-                                                      ),
-                                                    ),
-                                                    const SizedBox(width: 4),
-                                                    Text(
-                                                      userData['userName'] ??
-                                                          data['senderId'],
-                                                      style: TextStyle(
-                                                        fontSize: 12,
-                                                        color: Colors.grey[600],
-                                                        fontWeight:
-                                                            FontWeight.bold,
-                                                      ),
-                                                    ),
-                                                  ],
-                                                );
+                                              String displayName = data['senderId'] ?? '';
+                                              String? profileImage;
+                                              
+                                              if (userSnapshot.hasData && userSnapshot.data!.docs.isNotEmpty) {
+                                                final userData = userSnapshot.data!.docs.first.data() as Map<String, dynamic>;
+                                                displayName = userData['userName'] ?? displayName;
+                                                profileImage = userData['profileImage'];
                                               }
-                                              return Row(
-                                                mainAxisSize: MainAxisSize.min,
-                                                children: [
-                                                  CircleAvatar(
-                                                    radius: 10,
-                                                    backgroundColor:
-                                                        Theme.of(context)
-                                                            .primaryColor
-                                                            .withOpacity(0.5),
-                                                    child: Text(
-                                                      (data['senderId'] ??
-                                                              '')[0]
-                                                          .toUpperCase(),
-                                                      style: const TextStyle(
-                                                        fontSize: 12,
-                                                        color: Colors.white,
-                                                        fontWeight:
-                                                            FontWeight.bold,
-                                                      ),
-                                                    ),
-                                                  ),
-                                                  const SizedBox(width: 4),
-                                                  Text(
-                                                    data['senderId'] ?? '',
-                                                    style: TextStyle(
-                                                      fontSize: 12,
-                                                      color: Colors.grey[600],
-                                                      fontWeight:
-                                                          FontWeight.bold,
-                                                    ),
-                                                  ),
-                                                ],
+
+                                              return CircleAvatar(
+                                                backgroundColor: Theme.of(context).primaryColor,
+                                                backgroundImage: profileImage != null ? NetworkImage(profileImage) : null,
+                                                child: profileImage == null
+                                                    ? Text(
+                                                        displayName[0].toUpperCase(),
+                                                        style: const TextStyle(color: Colors.white),
+                                                      )
+                                                    : null,
                                               );
                                             },
                                           ),

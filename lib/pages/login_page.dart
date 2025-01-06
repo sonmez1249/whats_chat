@@ -1,6 +1,9 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+
+enum LoginType { user, admin }
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -16,6 +19,7 @@ class _LoginPageState extends State<LoginPage> {
   bool _isLoading = false;
   bool _rememberMe = false;
   bool _obscurePassword = true;
+  LoginType _loginType = LoginType.user;
 
   @override
   void initState() {
@@ -59,12 +63,40 @@ class _LoginPageState extends State<LoginPage> {
 
         await _saveCredentials();
 
+        final userQuery = await FirebaseFirestore.instance
+            .collection('users')
+            .where('email', isEqualTo: _emailController.text.trim())
+            .get();
+
+        if (userQuery.docs.isEmpty) {
+          throw 'Kullanıcı bulunamadı';
+        }
+
+        final userData = userQuery.docs.first.data();
+        final isAdmin = userData['isAdmin'] ?? false;
+
         if (mounted) {
-          Navigator.pushReplacementNamed(context, '/home');
+          if (_loginType == LoginType.admin && !isAdmin) {
+            await FirebaseAuth.instance.signOut();
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Admin yetkisine sahip değilsiniz')),
+            );
+            return;
+          }
+
+          if (_loginType == LoginType.admin && isAdmin) {
+            Navigator.pushReplacementNamed(context, '/admin');
+          } else {
+            Navigator.pushReplacementNamed(context, '/home');
+          }
         }
       } on FirebaseAuthException catch (e) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(e.message ?? 'Giriş başarısız')),
+        );
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Hata: $e')),
         );
       } finally {
         if (mounted) {
@@ -207,8 +239,38 @@ class _LoginPageState extends State<LoginPage> {
                       ),
                     ],
                   ),
+                  const SizedBox(height: 16),
+                  // Giriş tipi seçimi
+                  Row(
+                    children: [
+                      Expanded(
+                        child: RadioListTile<LoginType>(
+                          title: const Text('Kullanıcı'),
+                          value: LoginType.user,
+                          groupValue: _loginType,
+                          onChanged: (LoginType? value) {
+                            setState(() {
+                              _loginType = value!;
+                            });
+                          },
+                        ),
+                      ),
+                      Expanded(
+                        child: RadioListTile<LoginType>(
+                          title: const Text('Admin'),
+                          value: LoginType.admin,
+                          groupValue: _loginType,
+                          onChanged: (LoginType? value) {
+                            setState(() {
+                              _loginType = value!;
+                            });
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
                   const SizedBox(height: 24),
-                  // Giriş yap butonu
+                  // Giriş butonu
                   SizedBox(
                     width: double.infinity,
                     height: 50,
@@ -227,13 +289,12 @@ class _LoginPageState extends State<LoginPage> {
                               width: 20,
                               child: CircularProgressIndicator(
                                 strokeWidth: 2,
-                                valueColor:
-                                    AlwaysStoppedAnimation<Color>(Colors.white),
+                                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
                               ),
                             )
-                          : const Text(
-                              'Giriş Yap',
-                              style: TextStyle(
+                          : Text(
+                              _loginType == LoginType.admin ? 'Admin Girişi' : 'Kullanıcı Girişi',
+                              style: const TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold,
                               ),

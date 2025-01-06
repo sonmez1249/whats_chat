@@ -18,28 +18,29 @@ class _SearchPageState extends State<SearchPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
         title: TextField(
           controller: _searchController,
           autofocus: true,
           decoration: InputDecoration(
             hintText: 'Sohbet veya grup ara...',
             border: InputBorder.none,
-            hintStyle: TextStyle(color: Colors.grey[600]),
-            prefixIcon: const Icon(Icons.search, color: Colors.grey),
+            hintStyle: TextStyle(color: Colors.grey[300]),
+            contentPadding: const EdgeInsets.symmetric(vertical: 15),
+            prefixIcon: Icon(Icons.search, color: Colors.grey[300]),
           ),
           style: const TextStyle(
-            color: Colors.black,
+            color: Colors.white,
             fontSize: 16,
           ),
+          cursorColor: Colors.white,
           onChanged: (value) {
             setState(() {
               _searchQuery = value.toLowerCase();
             });
           },
         ),
-        iconTheme: const IconThemeData(color: Colors.black),
+        backgroundColor: Theme.of(context).primaryColor,
+        elevation: 0,
       ),
       body: StreamBuilder<QuerySnapshot>(
         stream: FirebaseFirestore.instance
@@ -47,20 +48,29 @@ class _SearchPageState extends State<SearchPage> {
             .where('members', arrayContains: currentUser?.email)
             .snapshots(),
         builder: (context, snapshot) {
-          if (!snapshot.hasData) {
+          if (snapshot.hasError) {
+            return Center(child: Text('Hata: ${snapshot.error}'));
+          }
+
+          if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
 
-          final chats = snapshot.data!.docs.where((doc) {
+          final chats = snapshot.data?.docs.where((doc) {
             final data = doc.data() as Map<String, dynamic>;
-            final isGroup = data['isGroup'] ?? false;
+            final hiddenFor = List<String>.from(data['hiddenFor'] ?? []);
+            
+            // Gizlenen sohbetleri filtrele
+            if (hiddenFor.contains(currentUser?.email)) {
+              return false;
+            }
 
-            if (isGroup) {
-              // Grup sohbetlerinde grup adına göre ara
-              final groupName = (data['chatName'] as String).toLowerCase();
+            if (data['isGroup'] ?? false) {
+              // Grup sohbeti için grup adında ara
+              final groupName = (data['name'] ?? '').toString().toLowerCase();
               return groupName.contains(_searchQuery);
             } else {
-              // Birebir sohbetlerde diğer kullanıcının adına göre ara
+              // Kişisel sohbet için diğer kullanıcının adında ara
               final members = List<String>.from(data['members'] ?? []);
               final otherUserEmail = members.firstWhere(
                 (email) => email != currentUser?.email,
@@ -68,12 +78,10 @@ class _SearchPageState extends State<SearchPage> {
               );
               return otherUserEmail.toLowerCase().contains(_searchQuery);
             }
-          }).toList();
+          }).toList() ?? [];
 
           if (chats.isEmpty) {
-            return const Center(
-              child: Text('Sonuç bulunamadı'),
-            );
+            return const Center(child: Text('Sonuç bulunamadı'));
           }
 
           return ListView.builder(
@@ -82,6 +90,7 @@ class _SearchPageState extends State<SearchPage> {
               final chat = chats[index];
               final data = chat.data() as Map<String, dynamic>;
               final isGroup = data['isGroup'] ?? false;
+              final members = List<String>.from(data['members'] ?? []);
 
               if (isGroup) {
                 return ListTile(
@@ -89,21 +98,21 @@ class _SearchPageState extends State<SearchPage> {
                     backgroundColor: Theme.of(context).primaryColor,
                     child: const Icon(Icons.group, color: Colors.white),
                   ),
-                  title: Text(data['chatName'] ?? ''),
-                  subtitle: Text('${data['members']?.length ?? 0} üye'),
+                  title: Text(data['name'] ?? 'İsimsiz Grup'),
+                  subtitle: Text('${members.length} üye'),
                   onTap: () {
                     Navigator.pushNamed(
                       context,
                       '/chat',
                       arguments: {
                         'chatId': chat.id,
-                        'userEmail': data['chatName'],
+                        'userEmail': data['name'],
+                        'isGroup': true,
                       },
                     );
                   },
                 );
               } else {
-                final members = List<String>.from(data['members'] ?? []);
                 final otherUserEmail = members.firstWhere(
                   (email) => email != currentUser?.email,
                   orElse: () => '',
@@ -116,27 +125,29 @@ class _SearchPageState extends State<SearchPage> {
                       .get(),
                   builder: (context, userSnapshot) {
                     String displayName = otherUserEmail;
-                    if (userSnapshot.hasData &&
-                        userSnapshot.data!.docs.isNotEmpty) {
-                      final userData = userSnapshot.data!.docs.first.data()
-                          as Map<String, dynamic>;
+                    
+                    if (userSnapshot.hasData && userSnapshot.data!.docs.isNotEmpty) {
+                      final userData = userSnapshot.data!.docs.first.data() as Map<String, dynamic>;
                       displayName = userData['userName'] ?? otherUserEmail;
                     }
 
                     return ListTile(
                       leading: CircleAvatar(
                         backgroundColor: Theme.of(context).primaryColor,
-                        child: Text(displayName[0].toUpperCase()),
+                        child: Text(
+                          displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
+                          style: const TextStyle(color: Colors.white),
+                        ),
                       ),
                       title: Text(displayName),
-                      subtitle: const Text('Kişisel Sohbet'),
                       onTap: () {
                         Navigator.pushNamed(
                           context,
                           '/chat',
                           arguments: {
                             'chatId': chat.id,
-                            'userEmail': otherUserEmail,
+                            'userEmail': displayName,
+                            'isGroup': false,
                           },
                         );
                       },
